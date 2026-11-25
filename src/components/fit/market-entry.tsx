@@ -39,15 +39,14 @@ export function MarketEntry() {
         const fromUrl = titleFromAmazonUrl(amazonInput);
         if (fromUrl) {
           setProduct((p) => p || fromUrl);
-          const brandWord = brand.trim().toLowerCase();
-          const initial = fromUrl.toLowerCase().split(/\s+/).filter((w) => w !== brandWord && !/^\d+%?$/.test(w)).slice(0, 4).join(' ');
+          const initial = starterKeyword(fromUrl, brand);
           try { const expanded = await suggest({ data: { title: fromUrl, keywords: [initial] } }); if (expanded.terms.length) setKeywords(expanded.terms.slice(0, 3)); } catch { setKeywords([initial]); }
         }
         setError(result.message ?? 'Enter the product details manually.'); setManual(true); return;
       }
       const item = result.product;
       setLookup(item); setBrand((b) => b || item.brand); setPrice(item.price ? String(item.price.toFixed(2)) : '');
-      const initial = item.keywords?.length ? item.keywords : [item.title.toLowerCase().split(/\s+/).slice(0, 5).join(' ')];
+      const initial = item.keywords?.length ? item.keywords : [starterKeyword(item.title, brand || item.brand)];
       const expanded = await suggest({ data: { title: item.title, keywords: initial } });
       setKeywords(expanded.terms); setManual(false);
     } catch { setError('We could not retrieve this Amazon listing. Enter the details manually.'); setManual(true); }
@@ -93,6 +92,14 @@ export function MarketEntry() {
       <PrimaryBtn type="submit" disabled={!valid || busy} className="h-14 w-full text-base">{busy ? <Loader2 className="h-5 w-5 animate-spin" /> : null} Analyze my market <ArrowRight className="h-5 w-5" /></PrimaryBtn>
     </form>
   </div>;
+}
+
+// A first search phrase from a product title: no brand name, numbers, sizes or filler words.
+const FILLER = new Set(['for', 'with', 'and', 'the', 'of', 'a', 'an', '100', 'natural', 'organic', 'premium', 'best', 'new', 'pack', 'oz', 'fl', 'count', 'grass', 'fed', 'face', 'body', 'skin', 'care']);
+function starterKeyword(title: string, brand: string) {
+  const brandWords = new Set(brand.toLowerCase().split(/\s+/).filter(Boolean));
+  const words = title.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w) => w && !brandWords.has(w) && !/^\d/.test(w) && !FILLER.has(w));
+  return words.slice(0, 3).join(' ') || title.toLowerCase().split(/\s+/).slice(0, 3).join(' ');
 }
 
 function TermAdder({ onAdd }: { onAdd: (term: string) => void }) {
