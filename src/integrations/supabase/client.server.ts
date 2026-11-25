@@ -30,22 +30,30 @@ function createSupabaseFetch(supabaseKey: string): typeof fetch {
 }
 
 function createSupabaseAdminClient() {
+  // Hosted outside Lovable Cloud: the server uses the project's publishable key plus a
+  // private x-app-secret header. Row level security only lets requests with that header in.
+  // SUPABASE_SERVICE_ROLE_KEY is still honoured if it is ever set.
   const SUPABASE_URL = process.env['SUPABASE_URL'];
-  const SUPABASE_SERVICE_ROLE_KEY = process.env['SUPABASE_SERVICE_ROLE_KEY'];
+  const SERVICE_KEY = process.env['SUPABASE_SERVICE_ROLE_KEY'];
+  const PUBLISHABLE_KEY = process.env['SUPABASE_PUBLISHABLE_KEY'];
+  const APP_DB_SECRET = process.env['APP_DB_SECRET'];
+  const key = SERVICE_KEY || PUBLISHABLE_KEY;
 
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+  if (!SUPABASE_URL || !key || (!SERVICE_KEY && !APP_DB_SECRET)) {
     const missing = [
       ...(!SUPABASE_URL ? ['SUPABASE_URL'] : []),
-      ...(!SUPABASE_SERVICE_ROLE_KEY ? ['SUPABASE_SERVICE_ROLE_KEY'] : []),
+      ...(!key ? ['SUPABASE_PUBLISHABLE_KEY'] : []),
+      ...(!SERVICE_KEY && !APP_DB_SECRET ? ['APP_DB_SECRET'] : []),
     ];
-    const message = `Missing Supabase environment variable(s): ${missing.join(', ')}. Connect Supabase in Lovable Cloud.`;
+    const message = `Missing Supabase environment variable(s): ${missing.join(', ')}.`;
     console.error(`[Supabase] ${message}`);
     throw new Error(message);
   }
 
-  return createClient<Database>(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+  return createClient<Database>(SUPABASE_URL, key, {
     global: {
-      fetch: createSupabaseFetch(SUPABASE_SERVICE_ROLE_KEY),
+      fetch: createSupabaseFetch(key),
+      headers: !SERVICE_KEY && APP_DB_SECRET ? { 'x-app-secret': APP_DB_SECRET } : {},
     },
     auth: {
       storage: undefined,

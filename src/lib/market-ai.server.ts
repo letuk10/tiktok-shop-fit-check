@@ -1,23 +1,40 @@
-import { generateResponse, type ResponsesResponse } from "@lovable.dev/ai-gateway";
+import { getVercelOidcToken } from "@vercel/oidc";
 import type { Relevance, SearchExpansion } from "./discovery";
 
-function responseText(response: ResponsesResponse) {
-  const chunks: string[] = [];
-  for (const item of response.output ?? []) {
-    if (item.type !== "message") continue;
-    for (const content of item.content ?? []) if (content.type === "output_text") chunks.push(content.text);
-  }
-  return chunks.join("").trim();
+// Vercel AI Gateway (OpenAI-compatible). On Vercel the project's OIDC token authenticates
+// the call, so no key is stored; AI_GATEWAY_API_KEY is honoured for local runs.
+const GATEWAY_URL = "https://ai-gateway.vercel.sh/v1/chat/completions";
+const MODEL = process.env["AI_MODEL"] || "anthropic/claude-haiku-5.5";
+
+async function gatewayToken() {
+  if (process.env["AI_GATEWAY_API_KEY"]) return process.env["AI_GATEWAY_API_KEY"];
+  return getVercelOidcToken();
+}
+
+function parseJson<T>(text: string): T {
+  try { return JSON.parse(text) as T; } catch { /* fall through */ }
+  const start = text.indexOf("{"), end = text.lastIndexOf("}");
+  if (start >= 0 && end > start) return JSON.parse(text.slice(start, end + 1)) as T;
+  throw new Error("AI response was not JSON");
 }
 
 async function jsonCall<T>(name: string, schema: Record<string, unknown>, prompt: string): Promise<T> {
-  const response = await generateResponse({
-    model: "openai/gpt-6-astra",
-    input: prompt,
-    reasoning: { effort: "low" },
-    text: { format: { type: "json_schema", name, strict: true, schema } },
+  const res = await fetch(GATEWAY_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${await gatewayToken()}` },
+    body: JSON.stringify({
+      model: MODEL,
+      temperature: 0,
+      max_tokens: 8000,
+      messages: [{ role: "user", content: prompt }],
+      response_format: { type: "json_schema", json_schema: { name, strict: true, schema } },
+    }),
+    signal: AbortSignal.timeout(45000),
   });
-  return JSON.parse(responseText(response)) as T;
+  if (!res.ok) throw new Error(`AI gateway ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  const json: any = await res.json();
+  const text: string = json?.choices?.[0]?.message?.content ?? "";
+  return parseJson<T>(text);
 }
 
 const expansionSchema = {
