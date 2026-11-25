@@ -1,0 +1,32 @@
+# Market-first Fit Check
+- [ ] Finish Part 1 only: resolve preview errors, audit 30-day tallow totals, verify sewing-kit thin state, scenarios and three exact FBT examples
+- [x] Fix preview errors and verify market entry and existing reports; 78 regression tests pass
+- [ ] Data engine quality pass: multi-pass discovery, relevance, niche metrics, robust benchmarks and honest projections
+- [ ] Official FBT rate card, fee panel and ASIN provider cache/lookup
+- [ ] ASIN-first entry with manual fallback and prefilled product inputs
+- [ ] Verify beef tallow and sewing-kit discovery and month 3/6/12 scenarios end to end
+- [x] Report rebuilt as a 17-slide partner deck with Present mode, landscape print, team notes and Hide pricing
+- [x] Category and 90-day product data cached per submission
+- [x] Keyword broadening, confirm up to 5 competitors, keyword line and suggestion chips
+- [x] Sticky "Show me my plan" bar after the market renders
+- [x] Roles renamed to Partner and Brand Strategist, with team role filter
+- [x] 12-month GMV and profit chart with scenario toggle and month table
+- [x] Report and plan rewritten as one story (summary, opportunity, playbook, plan, numbers, commitments, next step)
+- [x] Zero-commission warning and embedded top videos
+- [x] Required visible questions with shared validation
+- [x] Investigate automatic Amazon weight and dimensions
+- [ ] Automatic Amazon weight and dimensions: waiting for an authorized Amazon product data source.
+- [x] Book a call in the plan and report popup
+- [x] Validate warning, required inputs, plan/report booking controls and mobile layout; 41 tests passing
+- [ ] Verify TikTok playback with available cached videos: inspected reports returned no top videos.
+- [x] Notify Pablo when validation is finished and the app is ready to test
+- [x] Enriched competitor scans, caching, progress and own-product comparisons
+- [x] Read-only benchmarks, videos, creators and ads across market and report
+- [x] Benchmark-derived scenarios and protected team overrides/refresh
+- [x] Tests and live end-to-end validation of the data-driven flow
+- [x] Minimal market entry and submission creation
+- [x] Product-only scan, metrics, share and price charts
+- [x] Interest gate, market-only report and team filter
+- [x] Reordered qualification, economics, fulfillment and plan
+- [x] Business-rule tests and end-to-end verification
+- [ ] Email delivery of market report link: waiting for a verified sender domain; email is saved and the report link is available onscreen.

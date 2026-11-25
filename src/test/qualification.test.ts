@@ -1,0 +1,13 @@
+import { describe,expect,it } from 'vitest';
+import { hasZeroCommission,marketEntrySchema,qualificationReady,validVideoId } from '@/lib/qualification';
+const base={role:'client',submitter_name:'Pablo',submitter_email:'pablo@example.com',branch:'launch',answers:{},products:[],assumptions:{}};
+describe('required client questions',()=>{
+ it('requires a price and every added keyword at market entry',()=>{expect(marketEntrySchema.safeParse({brand:'Brand',product:'Sewing kit',asin:'',keywords:['kit'],price:12}).success).toBe(true);expect(marketEntrySchema.safeParse({brand:'Brand',product:'Sewing kit',asin:'',keywords:['kit',''],price:12}).success).toBe(false);expect(marketEntrySchema.safeParse({brand:'Brand',product:'kit',asin:'',keywords:['kit']}).success).toBe(false);});
+ it('requires internal client contact information',()=>{expect(qualificationReady(1,base)).toBe(true);expect(qualificationReady(1,{...base,role:'pod_leader'})).toBe(false);});
+ it('requires every launch answer and accepts an explicit no',()=>{expect(qualificationReady(2,base)).toBe(false);expect(qualificationReady(2,{...base,answers:{usSeller:'no',dtc:['none'],commitSamples:false,commitAds:false}})).toBe(true);});
+ it('requires own-shop answers and conditional ad spend',()=>{const s={...base,branch:'optimize',answers:{shopName:'Shop',shopId:'123',runsIt:'inhouse',samplesNow:0,gmvMax:false,probation:'unsure',fulfillment:'fbt',challenge:'Growth'}};expect(qualificationReady(2,s)).toBe(true);expect(qualificationReady(2,{...s,answers:{...s.answers,gmvMax:true}})).toBe(false);});
+ it('requires positive measurements, catalog and revenue answers',()=>{const s={...base,answers:{amazonRevenue:'<$20K',dtcRevenue:'<$20K',catalogSize:1},products:[{name:'Kit',price:12,cogs:0,weight:1,length:8,width:5,height:3}]};expect(qualificationReady(3,s)).toBe(true);expect(qualificationReady(3,{...s,products:[{...s.products[0],weight:0}]})).toBe(false);});
+ it('requires own fulfillment cost and allows zero',()=>{expect(qualificationReady(4,base)).toBe(false);expect(qualificationReady(4,{...base,assumptions:{ownCost:0}})).toBe(true);});
+ it('flags exactly zero commission, not unavailable data',()=>{expect(hasZeroCommission([12,0,null])).toBe(true);expect(hasZeroCommission([12,null])).toBe(false);});
+ it('restricts embedded video identifiers',()=>{expect(validVideoId('7431234567890123456')).toBe(true);expect(validVideoId('../bad?query')).toBe(false);});
+});
