@@ -48,6 +48,9 @@ export function searchTermSet(keywords: string[], expansion: SearchExpansion, ti
     const parts = t.split(" ").filter(Boolean);
     if (!parts.length) return false;
     if (parts.length === 1) return t === coreTerm; // the only one-word search is the core term
+    if (parts.some((w) => /\d/.test(w))) return false; // sizes, counts and percentages are not search terms
+    // A term must name the product: brand-plus-number fragments from the title do not.
+    if (coreTerm && !t.includes(coreTerm) && !keywords.some((k) => cleanTerm(k) === t) && !expansion.variants.map(cleanTerm).includes(t)) return false;
     return !parts.every((w) => GENERIC_WORDS.has(w) || STOP_WORDS.has(w));
   };
   return [...new Set([...keywords.map(cleanTerm), coreTerm, ...expansion.variants.map(cleanTerm), ...deterministic, titleWords.slice(0, 2).join(" ")])].filter(useful).slice(0, MAX_SEARCH_TERMS);
