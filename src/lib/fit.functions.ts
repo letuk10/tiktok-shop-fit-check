@@ -427,6 +427,12 @@ async function amazonPageLookup(asin: string): Promise<AsinProduct | null> {
   const html = await res.text();
   if (!res.ok || isAmazonBlockPage(html)) { console.warn(`Amazon page lookup for ${asin} blocked or failed (${res.status})`); return null; }
   const parsed = parseAmazonPage(html);
+  // TEMP diagnostics for the page parser.
+  try {
+    const plain = html.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+    const around = (re: RegExp) => { const i = plain.search(re); return i < 0 ? "none" : plain.slice(Math.max(0, i - 40), i + 220); };
+    console.info(`[asin-debug] ${asin} len=${html.length} dims=${around(/Dimensions/i)} || weight=${around(/Weight/i)} || prices=${[...html.matchAll(/class="a-offscreen">\s*([^<]{1,20})</g)].slice(0, 8).map((m) => m[1]).join(",")} || ptp=${html.indexOf("priceToPay")} core=${html.indexOf("corePriceDisplay_desktop_feature_div")} apex=${html.indexOf("apex_desktop")}`);
+  } catch { /* diagnostics only */ }
   if (!parsed) { console.warn(`Amazon page for ${asin} could not be parsed`); return null; }
   return { ...parsed, provider: "amazon" };
 }
