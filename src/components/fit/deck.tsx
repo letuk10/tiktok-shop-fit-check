@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -326,7 +327,7 @@ export function DeckView({ r, k, answers, brand, branch, price, team, hidePricin
     <div className="deck no-print space-y-10">{slides.map((s, i) => <SlideView key={s.key} s={s} n={i + 1} team={team} />)}</div>
     {/* Print copy: one fixed 1920 x 1080 page per slide. Kept off screen so it can be measured. */}
     <div className="print-deck" aria-hidden inert>{slides.map((s, i) => <div key={s.key} className="print-page"><FixedSlide s={s} n={i + 1} /></div>)}</div>
-    {presenting && <Presenter slides={slides} onExit={onExit} />}
+    {presenting && typeof document !== "undefined" && createPortal(<Presenter slides={slides} onExit={onExit} />, document.body)}
   </>;
 }
 
@@ -359,7 +360,10 @@ function Presenter({ slides, onExit }: { slides: SlideDef[]; onExit: () => void 
       if (e.key === "End") setI(slides.length - 1);
       if (e.key === "Escape") onExit();
     };
-    const fs = () => { if (!document.fullscreenElement) onExit(); };
+    // Leaving browser fullscreen (Esc) also closes the presentation, but only if fullscreen was
+    // actually entered: when the browser refuses fullscreen the presentation still runs in the window.
+    let entered = false;
+    const fs = () => { if (document.fullscreenElement) entered = true; else if (entered) onExit(); };
     window.addEventListener("keydown", key);
     document.addEventListener("fullscreenchange", fs);
     return () => { window.removeEventListener("keydown", key); document.removeEventListener("fullscreenchange", fs); if (document.fullscreenElement) document.exitFullscreen().catch(() => undefined); };
@@ -372,7 +376,7 @@ function Presenter({ slides, onExit }: { slides: SlideDef[]; onExit: () => void 
   const touch = useRef<number | null>(null);
   const s = slides[i];
   if (!s) return null;
-  return <div ref={ref} className="no-print fixed inset-0 z-50 overflow-hidden bg-navy" role="dialog" aria-label="Presentation"
+  return <div ref={ref} className="no-print fixed inset-0 z-[100] h-[100dvh] w-screen overflow-hidden bg-navy" role="dialog" aria-label="Presentation"
     onTouchStart={(e) => { touch.current = e.touches[0]?.clientX ?? null; }}
     onTouchEnd={(e) => { const x = e.changedTouches[0]?.clientX; if (touch.current !== null && x !== undefined && Math.abs(x - touch.current) > 50) go(x < touch.current ? 1 : -1); touch.current = null; }}>
     <div className="absolute" style={{ left, top, width: SLIDE_W, height: SLIDE_H, transform: `scale(${scale})`, transformOrigin: "0 0" }}
