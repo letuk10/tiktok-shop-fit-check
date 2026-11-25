@@ -9,6 +9,8 @@ import { cn } from "@/lib/utils";
 import { ProfitChart } from "./story";
 import { PrimaryBtn } from "./ui";
 import { PriceBandChart } from "./price-bands";
+import { LeverTable, LeverTakeaways } from "./levers";
+import { leverScorecard } from "@/lib/levers";
 
 type R = ReturnType<typeof computeAll>;
 const BOOKING_URL = "https://calendly.com/pablo-sophiesociety/30min";
@@ -32,19 +34,23 @@ export type SlideDef = { key: string; eyebrow: string; title: string; dark?: boo
 
 function Footer({ n, dark }: { n: number; dark?: boolean | undefined }) {
   return <div className={cn("mt-auto flex items-center justify-between pt-6 text-sm font-semibold", dark ? "text-primary-foreground/70" : "text-caption")}>
-    <span>{String(n).padStart(2, "0")} | <span aria-hidden>▲ ■ ●</span></span><span>Sophie Society</span>
+    <span>{String(n).padStart(2, "0")} | <span aria-hidden>▲ ■ ●</span></span><img src={dark ? "/brand/logo-reversed-white.png" : "/brand/logo-primary-navy.png"} alt="Sophie Society" className="h-10 w-auto" />
   </div>;
 }
 
 function SlideView({ s, n, team, fixed }: { s: SlideDef; n: number; team: boolean; fixed?: boolean }) {
   return <div className={cn("deck-slide @container", fixed && "flex flex-1 flex-col")}>
-    <section className={cn("slide flex flex-col p-6 @xl:p-10", s.dark ? "bg-navy text-primary-foreground" : "bg-card", fixed ? "flex-1" : "rounded-2xl border border-border", s.dark && !fixed && "border-0")}>
-      <div className={cn("eyebrow", s.dark && "text-primary-foreground/70")}>{s.eyebrow}</div>
+    <section className={cn("slide relative isolate flex flex-col overflow-hidden p-6 @xl:p-10", s.dark ? "bg-navy text-primary-foreground" : "bg-card", fixed ? "flex-1" : "rounded-2xl border border-border", s.dark && !fixed && "border-0")}>
+      {/* Brand device: one large cropped S mark at 5% on navy slides, never tiled. */}
+      {s.dark && <img src="/brand/mark-white.png" alt="" aria-hidden className="pointer-events-none absolute -z-10 -bottom-[18%] -right-[8%] w-[55%] max-w-[640px] opacity-[0.05]" />}
+      {n === 1 && <img src="/brand/logo-reversed-white.png" alt="Sophie Society" className="relative mb-8 h-14 w-auto self-start" />}
+      <div className={cn("eyebrow relative", s.dark && "text-primary-foreground/70")}>{s.eyebrow}</div>
       {n === 1 ? <h1 className={cn("mt-3 max-w-4xl text-4xl leading-tight @xl:text-6xl", s.dark && "text-primary-foreground")}>{s.title}</h1>
         : <h2 className={cn("mt-3 max-w-4xl text-3xl leading-tight @xl:text-5xl", s.dark && "text-primary-foreground")}>{s.title}</h2>}
       <div className="mt-8 space-y-6">{s.body}</div>
       {s.source && <p className={cn("mt-6 text-xs", s.dark ? "text-primary-foreground/60" : "text-caption")}>{s.source}</p>}
       <Footer n={n} dark={s.dark} />
+      {n === 1 && <div aria-hidden className="absolute inset-x-0 bottom-0 flex h-2">{["bg-cloud", "bg-gold", "bg-orange", "bg-growth", "bg-signal", "bg-cream"].map((c) => <span key={c} className={cn("flex-1", c)} />)}</div>}
     </section>
     {team && !fixed && !!s.notes?.length && <div className="no-print mt-3 rounded-xl border border-dashed border-navy bg-cloud p-4 text-sm">
       <div className="eyebrow">Notes for the team</div>
@@ -94,7 +100,7 @@ function Table({ head, rows, highlight }: { head: string[]; rows: ReactNode[][];
 
 const Body = ({ children }: { children: ReactNode }) => <p className="max-w-3xl text-lg">{children}</p>;
 
-export function buildSlides(D: Deck, r: R, opts: { hidePricing: boolean }): SlideDef[] {
+export function buildSlides(D: Deck, r: R, opts: { hidePricing: boolean; levers?: ReturnType<typeof leverScorecard> }): SlideDef[] {
   const { brand, optimize, cat, a } = D;
   const S: SlideDef[] = [];
   const date = new Date().toLocaleDateString("en-US", { month: "long", year: "numeric" });
@@ -147,6 +153,15 @@ export function buildSlides(D: Deck, r: R, opts: { hidePricing: boolean }): Slid
         <Table head={["Product", "30d GMV", "Growth", "Price", "Creators", "Videos", "Commission"]} rows={[...rows, ...ownRows]} highlight={ownRows.map((_, i) => highlight + i)} />
         <Body>Top 3 products hold {sharePct(D.top10Share)} of the niche. {D.competition === "Open" ? "Room is open for a new name." : D.competition === "Moderate" ? "Leaders exist, but there is room for a new name." : "A few names lead, so a new brand needs a sharp angle."}</Body>
       </>, source: D.source(30), notes: ["Products are the competitors the partner confirmed.", "Niche = all direct products discovered, 30 days.", `Competition: Open under 50% top-3 share, Concentrated above 70%.`] });
+  }
+
+  const L = opts.levers;
+  if (L && L.columns.length >= 2) {
+    S.push({ key: "levers", eyebrow: "The levers, product vs product", title: L.peer ? `How ${L.peer.name} gets to ${short(L.peer.gmv)} a month.` : "How the winners get there.",
+      body: <LeverTable s={L} brand={brand} compact />, source: D.source(30),
+      notes: ["Each column is one confirmed competitor, biggest first. The proof point is the smallest one above $20K a month.", "A + means Kalodata returns only the top 100 videos or the new-video count is capped, so the true number is higher.", "GMV from ads = video GMV Kalodata attributes to paid boosts. ROAS is a Kalodata estimate."] });
+    if (L.takeaways.length) S.push({ key: "takes", eyebrow: "What it takes", title: L.peer ? `To reach ${short(L.peer.gmv)} a month, ${brand} needs these levers.` : `What ${brand} needs to match them.`,
+      body: <LeverTakeaways s={L} />, source: D.source(30), notes: ["Targets are the proof point's own numbers, not averages.", "Use this slide to agree the sample volume and commission on the call."] });
   }
 
   if (peer) {
@@ -322,13 +337,26 @@ export function DeckView({ r, k, answers, brand, branch, price, team, hidePricin
   r: R; k: MarketData | null; answers: Answers; brand: string; branch: string | null; price?: number | undefined; team: boolean; hidePricing: boolean; presenting: boolean; onExit: () => void;
 }) {
   const D = buildDeck(r, k, answers, { brand, branch, price });
-  const slides = buildSlides(D, r, { hidePricing });
+  const slides = buildSlides(D, r, { hidePricing, levers: leverScorecard(k, answers) });
+  useDeckPageSize();
   return <>
     <div className="deck no-print space-y-10">{slides.map((s, i) => <SlideView key={s.key} s={s} n={i + 1} team={team} />)}</div>
     {/* Print copy: one fixed 1920 x 1080 page per slide. Kept off screen so it can be measured. */}
     <div className="print-deck" aria-hidden inert>{slides.map((s, i) => <div key={s.key} className="print-page"><FixedSlide s={s} n={i + 1} /></div>)}</div>
     {presenting && typeof document !== "undefined" && createPortal(<Presenter slides={slides} onExit={onExit} />, document.body)}
   </>;
+}
+
+/** Forces a landscape 16:9 page while the deck is mounted. Chrome ignores named @page sizes when saving to PDF,
+ *  so the unnamed @page rule is injected here and removed when the deck unmounts. */
+function useDeckPageSize() {
+  useEffect(() => {
+    const el = document.createElement("style");
+    el.id = "deck-page-size";
+    el.textContent = `@page { size: ${SLIDE_W}px ${SLIDE_H}px; margin: 0; } @media print { html, body { width: ${SLIDE_W}px !important; } }`;
+    document.head.appendChild(el);
+    return () => el.remove();
+  }, []);
 }
 
 /** Size of the presenter overlay itself, so the scale ignores scrollbars and browser chrome. */

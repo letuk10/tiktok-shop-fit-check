@@ -175,7 +175,7 @@
 .print-deck .collapse-body { display: block !important; }
 
 @media print {
-  @page { size: auto; margin: 14mm; }
+  @page { margin: 14mm; }
   html, body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .no-print { display: none !important; }
   .report-root:has(.print-deck) { max-width: none !important; margin: 0 !important; padding: 0 !important; }

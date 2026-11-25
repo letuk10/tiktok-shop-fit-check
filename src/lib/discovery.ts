@@ -96,13 +96,13 @@ export function applyClassificationFloor(pool: any[], expansion: SearchExpansion
   return pool.map((p) => {
     const title = cleanTerm(p.product_name);
     if (exclusions.some((excluded) => title.includes(excluded))) return { ...p, relevance: "no", relevanceReason: "Excluded product type." };
-    if (relevanceOf(p) === "direct" && !namesHead(title)) return { ...p, relevance: title.includes(core) ? "adjacent" : "no", relevanceReason: `Mentions ${core} but is not a ${core} ${head}.` };
+    if (relevanceOf(p) === "direct" && !namesHead(title)) return { ...p, relevance: namesCore(title, core) ? "adjacent" : "no", relevanceReason: `Mentions ${core} but is not a ${core} ${head}.` };
     // Ingredient niches must contain the ingredient. Generic skincare is not tallow.
     if (core.split(" ").includes("tallow") && (!title.split(" ").includes("tallow") || /\b(cooking|cook|frying|fry|rendered|lard)\b/.test(title))) return { ...p, relevance: "no", relevanceReason: "Not a tallow skincare product." };
     // Judge the device by what the name leads with. Kit contents listed later (threader, seam ripper) do not make it a device.
     if (/\bsewing\b/.test(core) && /\b(machines?|handheld|electric|cordless|gun|buckles?|pliers|threaders?|ripper|mannequins?|felt|cardboard|stitcher|fasteners?|chalk|pen|shears|scissors|crochet|knitting|embroidery|cross stitch|needlepoint)\b/.test(title.slice(0, 60))) return { ...p, relevance: "adjacent", relevanceReason: "Sewing device, craft project or specialist accessory, not a general hand-sewing repair kit." };
-    const exact = core.split(" ").length > 1 && title.includes(core);
-    const ingredientAndForm = core.split(" ").length === 1 && title.includes(core) && modifiers.some((word) => title.split(" ").includes(word));
+    const exact = core.split(" ").length > 1 && namesCore(title, core);
+    const ingredientAndForm = core.split(" ").length === 1 && namesCore(title, core) && modifiers.some((word) => title.split(" ").includes(word));
     if ((exact || ingredientAndForm) && namesHead(title) && !p.offCategory) {
       const partnerForms = productForms(expansion.product_type), forms = productForms(String(p.product_name));
       if (partnerForms.length && forms.length && !forms.some((f) => partnerForms.includes(f))) return { ...p, relevance: "adjacent" as const, relevanceReason: `Same ingredient, different product (${forms.join(", ")}).` };
@@ -130,6 +130,12 @@ export function productForms(name: string) {
   return specific.length ? specific : PRODUCT_FORMS['moisturizer']!.test(t) ? ["moisturizer"] : [];
 }
 
+/** The core as whole words (plural allowed), so "boric" does not match "Boricua". */
+export function namesCore(title: string, core: string) {
+  const c = core.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return !!c && new RegExp(`(^|\\s)${c}(s|es)?(\\s|$)`).test(title);
+}
+
 /** Kalodata gives categories either flat (ter_cate_id) or as objects (ter_category.category_id). */
 export function categoryId(p: any, level: 1 | 2 | 3): string {
   const flat = level === 1 ? p.pri_cate_id : level === 2 ? p.sec_cate_id : p.ter_cate_id;
@@ -142,7 +148,7 @@ export function categoryId(p: any, level: 1 | 2 | 3): string {
  * Counted by products, not revenue, so one huge off-shelf listing cannot claim the niche. */
 export function coreCategories(pool: any[], core: string, head?: string) {
   const c = cleanTerm(core), h = head ? cleanTerm(head) : "";
-  const ref = pool.filter((p) => { const t = cleanTerm(String(p.product_name)); return t.includes(c) && (!h || t.split(" ").some((w) => w === h || w === `${h}s`)); });
+  const ref = pool.filter((p) => { const t = cleanTerm(String(p.product_name)); return namesCore(t, c) && (!h || t.split(" ").some((w) => w === h || w === `${h}s`)); });
   const byCat = new Map<string, number>();
   for (const p of ref) { const id = categoryId(p, 2) || categoryId(p, 3); if (id && toNum(p.revenue) >= MIN_POOL_GMV) byCat.set(id, (byCat.get(id) ?? 0) + 1); }
   const total = [...byCat.values()].reduce((a, b) => a + b, 0);
@@ -159,7 +165,7 @@ export function fallbackClassify(pool: any[], core: string, partnerTitle = "", h
   const partnerForms = productForms(partnerTitle);
   return pool.map((p) => {
     const t = cleanTerm(String(p.product_name));
-    const named = t.includes(cleanTerm(core));
+    const named = namesCore(t, cleanTerm(core));
     const cat = categoryId(p, 2) || categoryId(p, 3);
     // Without category data we cannot judge the shelf, so the name decides.
     const inCategory = !cats.size || !cat || cats.has(cat);

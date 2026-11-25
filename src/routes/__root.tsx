@@ -98,7 +98,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
         rel: "stylesheet",
         href: appCss,
       },
-      { rel: "icon", href: "/favicon.ico", type: "image/x-icon" },
+      { rel: "icon", href: "/brand/mark-navy.png", type: "image/png" },
     ],
   }),
   shellComponent: RootShell,
@@ -129,13 +129,13 @@ function RootComponent() {
       {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
       <div className="flex min-h-screen flex-col">
         <header className="no-print mx-auto flex w-full max-w-5xl items-center justify-between px-5 py-5">
-          <Link to="/" className="text-sm font-bold tracking-tight text-navy">Sophie Society</Link>
+          <Link to="/" aria-label="Sophie Society home"><img src="/brand/logo-primary-navy.png" alt="Sophie Society" className="h-[56px] w-auto" /></Link>
           <span className="eyebrow">TikTok Shop Fit Check</span>
         </header>
         <main className="flex-1">
           <Outlet />
         </main>
-        <footer className="no-print mx-auto w-full max-w-5xl px-5 py-8 text-xs text-caption">Sophie Society · TikTok Shop</footer>
+        <footer className="no-print mx-auto flex w-full max-w-5xl items-center justify-between border-t border-border px-5 py-8 text-xs text-caption"><span>Sophie Society · TikTok Shop</span><span aria-hidden>▲ ■ ●</span></footer>
       </div>
       <Toaster />
     </QueryClientProvider>

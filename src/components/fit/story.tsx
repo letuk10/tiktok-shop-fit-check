@@ -8,6 +8,8 @@ import { BookCall } from "./book-call";
 import { MarketInsights, SourceLine } from "./insights";
 import { MarketShare, PriceBands } from "./market";
 import { FulfillmentSection } from "./sections";
+import { LeverTable, LeverTakeaways } from "./levers";
+import { leverScorecard } from "@/lib/levers";
 import { Eyebrow, GhostBtn, Note, Stat } from "./ui";
 
 type R = ReturnType<typeof computeAll>;
@@ -101,6 +103,7 @@ export function Story({ r, k, answers, brand, products, marketOnly = false, popu
   const rows = base?.rows ?? [];
   const m12 = rows[PLAN_MONTHS - 1];
   const a = r.assumptions, d = r.insights, mk = d.market;
+  const levers = leverScorecard(k, answers);
   const keyword = cap(k?.keywordInfo?.[0]?.used ?? products[0]?.keywords?.[0] ?? "This category");
   const commission = Math.round(a.affiliatePct);
   const creators = d.creators.leader ? `${d.creators.leader} followers` : "creators selling comparable products";
@@ -146,6 +149,13 @@ export function Story({ r, k, answers, brand, products, marketOnly = false, popu
       <MarketShare k={k} answers={answers} />
       <PriceBands k={k} answers={answers} title="Where you fit" />
     </Section>
+
+    {levers && <Section eyebrow="The levers" title={levers.peer ? `How ${levers.peer.name} gets to ${short(levers.peer.gmv)} a month` : "How the winners get there"}>
+      <p className="max-w-3xl">Every number is what each competitor did on TikTok Shop in the last 30 days. These are the levers that build GMV: creators, content volume, videos that sell, paid boost and channels.</p>
+      <LeverTable s={levers} brand={name} />
+      <div className="space-y-3"><h3 className="text-xl">What it takes to get there</h3><LeverTakeaways s={levers} /></div>
+      <SourceLine />
+    </Section>}
 
     <Section eyebrow="The playbook" title="What the winners do">
       {d.hasData ? <>
