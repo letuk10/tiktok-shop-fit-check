@@ -4,7 +4,7 @@ const text = z.string().trim().min(1).max(200);
 const email = z.string().trim().email().max(200);
 const positive = z.number().finite().positive();
 const nonnegative = z.number().finite().min(0);
-const lookup = z.object({title:z.string(),brand:z.string(),image:z.string(),price:positive,lengthIn:nonnegative,widthIn:nonnegative,heightIn:nonnegative,weightLb:nonnegative,cogs:nonnegative.optional(),monthlyRevenue:nonnegative.optional(),keywords:z.array(z.string()).optional(),categoryPath:z.array(z.string()).optional(),fbaPickAndPackFee:nonnegative.optional(),monthlySold:nonnegative.optional(),provider:z.enum(['hub','keepa'])});
+const lookup = z.object({title:z.string(),brand:z.string(),image:z.string(),price:nonnegative,lengthIn:nonnegative,widthIn:nonnegative,heightIn:nonnegative,weightLb:nonnegative,cogs:nonnegative.optional(),monthlyRevenue:nonnegative.optional(),keywords:z.array(z.string()).optional(),categoryPath:z.array(z.string()).optional(),fbaPickAndPackFee:nonnegative.optional(),monthlySold:nonnegative.optional(),provider:z.enum(['hub','keepa','amazon']),bsr:nonnegative.optional()});
 export const marketEntrySchema = z.object({brand:text,product:z.string().trim().min(1).max(2000),asin:z.string().max(10),keywords:z.array(text).min(1).max(8),price:positive,lookup:lookup.optional()});
 const product = z.object({name:text,price:positive,cogs:nonnegative,weight:positive,length:positive,width:positive,height:positive});
 export function qualificationReady(step:number, value:unknown):boolean {

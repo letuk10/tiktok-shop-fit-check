@@ -413,13 +413,35 @@ async function keepaLookup(asin: string): Promise<AsinProduct | null> {
   if (unmapped.length) console.info(`Keepa response for ${asin} did not include fields: ${unmapped.join(", ")}`);
   return mapped;
 }
+async function amazonPageLookup(asin: string): Promise<AsinProduct | null> {
+  const { parseAmazonPage, isAmazonBlockPage } = await import("./asin");
+  const res = await fetch(`https://www.amazon.com/dp/${asin}?th=1&psc=1`, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.9",
+    },
+    redirect: "follow",
+    signal: AbortSignal.timeout(15000),
+  });
+  const html = await res.text();
+  if (!res.ok || isAmazonBlockPage(html)) { console.warn(`Amazon page lookup for ${asin} blocked or failed (${res.status})`); return null; }
+  const parsed = parseAmazonPage(html);
+  if (!parsed) { console.warn(`Amazon page for ${asin} could not be parsed`); return null; }
+  return { ...parsed, provider: "amazon" };
+}
+
 export const lookupAsin = createServerFn({ method: "POST" }).inputValidator((d: unknown) => z.object({ asin: z.string().regex(/^[A-Za-z0-9]{10}$/) }).parse(d)).handler(async ({ data }) => {
   const asin = data.asin.toUpperCase(), sb = await db();
   const { data: cached } = await sb.from("asin_cache").select("fetched_at,payload").eq("asin", asin).maybeSingle();
   if (cached && Date.now() - new Date(cached.fetched_at).getTime() < 30 * 86400000) return { ok: true, product: cached.payload as any as AsinProduct, cached: true };
   try {
-    const product = await hubLookup(asin) ?? await keepaLookup(asin);
-    if (!product) return { ok: false, product: null, message: "Automatic Amazon lookup is not connected yet. Enter the product details manually." };
+    let product: AsinProduct | null = null;
+    for (const provider of [hubLookup, keepaLookup, amazonPageLookup]) {
+      try { product = await provider(asin); } catch (e) { console.error(`ASIN lookup provider failed for ${asin}`, e); }
+      if (product && product.title) break;
+    }
+    if (!product) return { ok: false, product: null, message: "Amazon did not return this listing right now. We filled in what we could; check the product details below." };
     await sb.from("asin_cache").upsert({ asin, fetched_at: new Date().toISOString(), payload: product as any });
     return { ok: true, product, cached: false };
   } catch (e) {
