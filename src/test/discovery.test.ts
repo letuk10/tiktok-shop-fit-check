@@ -116,3 +116,19 @@ describe("discovery quality fixes", () => {
     expect(out.map((p) => p.relevance)).toEqual(["direct", "adjacent", "adjacent", "adjacent"]);
   });
 });
+
+describe("product noun rule without AI", () => {
+  it("keeps sewing kits and drops things that only mention sewing", async () => {
+    const { fallbackExpansion, fallbackClassify, applyClassificationFloor } = await import("@/lib/discovery");
+    const exp = fallbackExpansion(["sewing kit"], "Travel Sewing Kit with 100 Accessories");
+    expect(exp.core).toBe("sewing");
+    expect(exp.head).toBe("kit");
+    const pool = [
+      { product_id: "1", product_name: "Seamless Stitching Sewing Kit 100Pcs", pri_cate_id: "home", revenue: 95000 },
+      { product_id: "2", product_name: "Foldable Craft Storage Box for Art Supply Sewing Hair Accessory", pri_cate_id: "home", revenue: 400000 },
+      { product_id: "3", product_name: "Mini Sewing Kits for Travel, 2 Pack", pri_cate_id: "home", revenue: 9000 },
+    ];
+    const out = applyClassificationFloor(fallbackClassify(pool, exp.core, exp.product_type), exp);
+    expect(out.map((p) => p.relevance)).toEqual(["direct", "adjacent", "direct"]);
+  });
+});

@@ -2,7 +2,7 @@
 const toNum = (x: unknown): number => typeof x === "number" ? x : typeof x === "string" ? Number.parseFloat(x.replace(/[$,%\s]/g, "")) || 0 : 0;
 const median = (xs: number[]) => { if (!xs.length) return 0; const s = [...xs].sort((a, b) => a - b), m = Math.floor(s.length / 2); return s.length % 2 ? (s[m] ?? 0) : ((s[m - 1] ?? 0) + (s[m] ?? 0)) / 2; };
 export type Relevance = "direct" | "adjacent" | "no";
-export interface SearchExpansion { core: string; variants: string[]; product_type: string; not_competitors: string[] }
+export interface SearchExpansion { core: string; variants: string[]; product_type: string; not_competitors: string[]; /** Product noun a direct competitor must name, e.g. "kit" for "sewing kit". Fallback only. */ head?: string }
 export const STOP_WORDS = new Set(["for", "with", "the", "and", "best", "natural", "organic", "a", "an", "of", "to", "in", "by", "your"]);
 export const MIN_POOL_GMV = 500;
 export const MIN_COMPETITOR_GMV = 5000;
@@ -23,11 +23,15 @@ export function fallbackExpansion(keywords: string[], title = ""): SearchExpansi
     const g = `${words[i]} ${words[i + 1]}`;
     if (g.includes(core) && !GENERIC_WORDS.has(words[i] ?? "") || g.includes(core) && !GENERIC_WORDS.has(words[i + 1] ?? "")) bigrams.push(g);
   }
-  return { core, variants: [...new Set(bigrams)].slice(0, 6), product_type: cleanTerm(title) || keywords.join(", "), not_competitors: [] };
+  // The head noun of the first keyword names the product ("kit" in "sewing kit"). Ingredient keywords
+  // ("beef tallow") have the core itself as head, so nothing extra is required.
+  const kwHead = cleanTerm(keywords[0] ?? "").split(" ").filter((w) => w && !STOP_WORDS.has(w) && !GENERIC_WORDS.has(w)).pop();
+  const head = kwHead && kwHead !== core ? kwHead : undefined;
+  return { core, variants: [...new Set(bigrams)].slice(0, 6), product_type: cleanTerm(title) || keywords.join(", "), not_competitors: [], ...(head ? { head } : {}) };
 }
 
 // Words that describe use or audience, not the product. Searching them alone floods the pool.
-export const GENERIC_WORDS = new Set(["face", "body", "skin", "hair", "men", "women", "kids", "baby", "dry", "care", "pack", "set", "kit", "gift", "new", "daily", "premium", "large", "small", "travel", "size", "oz", "count", "pure", "grass", "fed"]);
+export const GENERIC_WORDS = new Set(["face", "body", "skin", "hair", "men", "women", "kids", "baby", "dry", "care", "pack", "gift", "new", "daily", "premium", "large", "small", "travel", "size", "oz", "count", "pure", "grass", "fed"]);
 
 export function searchTermSet(keywords: string[], expansion: SearchExpansion, title = "") {
   const deterministic = keywords.flatMap((keyword) => {
@@ -84,15 +88,18 @@ export function applyClassificationFloor(pool: any[], expansion: SearchExpansion
   const core = cleanTerm(expansion.core);
   const exclusions = expansion.not_competitors.map(cleanTerm).filter(Boolean);
   const modifiers = [...new Set(expansion.variants.flatMap((variant) => cleanTerm(variant).split(" ")).filter((word) => word.length > 2 && !core.split(" ").includes(word) && !["for", "and", "the", "with"].includes(word)))];
+  const head = expansion.head ? cleanTerm(expansion.head) : "";
+  const namesHead = (title: string) => !head || title.split(" ").some((w) => w === head || w === `${head}s` || w === `${head}es`);
   return pool.map((p) => {
     const title = cleanTerm(p.product_name);
     if (exclusions.some((excluded) => title.includes(excluded))) return { ...p, relevance: "no", relevanceReason: "Excluded product type." };
+    if (relevanceOf(p) === "direct" && !namesHead(title)) return { ...p, relevance: title.includes(core) ? "adjacent" : "no", relevanceReason: `Mentions ${core} but is not a ${core} ${head}.` };
     // Ingredient niches must contain the ingredient. Generic skincare is not tallow.
     if (core.split(" ").includes("tallow") && (!title.split(" ").includes("tallow") || /\b(cooking|cook|frying|fry|rendered|lard)\b/.test(title))) return { ...p, relevance: "no", relevanceReason: "Not a tallow skincare product." };
     if (/\bsewing\b/.test(core) && /\b(machine|gun|buckle|pliers|threaders?|ripper|mannequins?|felt|cardboard|stitcher|fasteners?)\b/.test(title)) return { ...p, relevance: "adjacent", relevanceReason: "Sewing device, craft project or specialist accessory, not a general hand-sewing repair kit." };
     const exact = core.split(" ").length > 1 && title.includes(core);
     const ingredientAndForm = core.split(" ").length === 1 && title.includes(core) && modifiers.some((word) => title.split(" ").includes(word));
-    if (exact || ingredientAndForm) {
+    if ((exact || ingredientAndForm) && namesHead(title)) {
       const partnerForms = productForms(expansion.product_type), forms = productForms(String(p.product_name));
       if (partnerForms.length && forms.length && !forms.some((f) => partnerForms.includes(f))) return { ...p, relevance: "adjacent" as const, relevanceReason: `Same ingredient, different product (${forms.join(", ")}).` };
       return { ...p, relevance: "direct" as const, reason: "Matches the core product and product form." };
