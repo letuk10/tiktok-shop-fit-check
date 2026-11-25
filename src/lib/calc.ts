@@ -225,22 +225,36 @@ export function marginTone(m: number): "good" | "neutral" | "warn" {
 
 // ---------- projection ----------
 export const PLAN_MONTHS = 12;
-export const SAMPLE_RAMP = [0.2, 0.7, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1];
+/** Sophie's floor: no plan sends fewer samples a month. */
+export const SAMPLE_FLOOR = 150;
+/** New shops are capped on outreach early, so samples ramp over months 1 to 3. */
+export const NEW_SHOP_MONTH1_CAP = 150;
 export const VIDEO_REVENUE_RAMP = [0.15, 0.3, 0.5, 0.7, 0.85, 1, 1, 1, 1, 1, 1, 1];
+export const DEFAULT_CREATORS_PER_VIDEO = 0.8;
 
 export interface MonthRow {
   month: number;
   samples: number;
   newVideos: number;
+  /** Videos published by the program so far. */
+  totalVideos: number;
+  /** Videos still live and selling this month (after decay). Includes existing shop videos. */
   cumVideos: number;
+  /** Active affiliates: live videos times the competitors' creators per video. */
+  affiliates: number;
+  /** Effective GMV per live program video this month (benchmark x new-shop ramp, after guardrails). */
+  gmvPerVideo: number;
   gmv: number;
+  sampleCost: number;
   programCost: number;
   net: number;
-  affiliates: number;
   cumNet: number;
   adSpend: number;
+  capped: boolean;
 }
+export type PathKey = "pace" | "minimum";
 export interface Scenario {
+  key: PathKey;
   samples: number;
   label?: string;
   rows: MonthRow[];
@@ -255,60 +269,206 @@ export interface Scenario {
   actualAdStartMonth: number | null;
 }
 
+/** Samples delivered each month. New shops start at the outreach cap and reach full pace in month 3. */
+export function sampleSchedule(samples: number, newShop: boolean): number[] {
+  const n = Math.max(SAMPLE_FLOOR, samples);
+  return Array.from({ length: PLAN_MONTHS }, (_, i) => {
+    if (newShop && i === 0) return Math.min(n, NEW_SHOP_MONTH1_CAP);
+    if (i === 0 || (newShop && i === 1)) return Math.max(SAMPLE_FLOOR, Math.round(n / 2));
+    return n;
+  });
+}
+
+/** GMV ceiling per month: the month-6 guardrail, then a straight line to the month-12 guardrail. */
+export function guardrailCeiling(m: number, cap6: number, cap12: number) {
+  const hi = Math.max(cap6, cap12);
+  return m <= 6 ? cap6 : cap6 + (hi - cap6) * (m - 6) / 6;
+}
+
+export interface ProjectOptions { medianCompetitorGmv?: number; newShop?: boolean; creatorsPerVideo?: number; noCaps?: boolean; key?: PathKey }
+
 export function projectScenario(
   samples: number,
   a: Assumptions,
   econ: Economics,
   gmvPerVideo: number,
   start: { gmv: number; videos: number } = { gmv: 0, videos: 0 },
-  options: { medianCompetitorGmv?: number; newShop?: boolean; conservativeOf?: MonthRow[] } = {},
+  options: ProjectOptions = {},
 ): Scenario {
   const rows: MonthRow[] = [];
   const newShop = options.newShop ?? start.gmv <= 0;
-  let activeNew = 0, activeExisting = start.videos;
+  const keep = 1 - a.decayPct / 100;
+  const perCreator = Math.min(1, Math.max(0.1, options.creatorsPerVideo ?? DEFAULT_CREATORS_PER_VIDEO));
+  const median = options.medianCompetitorGmv;
+  const cap6 = Math.min(a.guardrailMonth6, median ? median * .5 : a.guardrailMonth6);
+  const cap12 = Math.min(a.guardrailMonth12, median ? median : a.guardrailMonth12);
+  const schedule = sampleSchedule(samples, newShop);
+  let live = 0, total = 0;
   let cumContrib = 0, cumCost = 0, breakEvenMonth: number | null = null;
-  let affiliates = 0, cumNet = 0, profitableMonth: number | null = null, maxInvestment = 0;
-  let earlyProfitFlag = false, actualAdStartMonth: number | null = null;
-  const capNotes: string[] = [];
+  let cumNet = 0, profitableMonth: number | null = null, maxInvestment = 0;
+  let earlyProfitFlag = false, actualAdStartMonth: number | null = null, cappedFrom: number | null = null;
   const margin = (econ.avgMarginFloor + a.adsFloorPct) / 100;
   for (let m = 1; m <= PLAN_MONTHS; m++) {
-    let delivered = samples * (SAMPLE_RAMP[m - 1] ?? 1);
-    if (newShop && m <= 2) delivered = Math.min(150, delivered);
+    const delivered = schedule[m - 1] ?? samples;
     const newVideos = delivered * a.videoRatePct / 100;
-    activeNew = activeNew * (1 - a.decayPct / 100) + newVideos;
-    activeExisting *= 1 - a.decayPct / 100;
-    const active = activeNew + activeExisting;
-    const revenueRamp = VIDEO_REVENUE_RAMP[m - 1] ?? 1;
-    const adsLive = m >= 3 && active >= 100;
+    live = live * keep + newVideos;
+    total += newVideos;
+    const allLive = live + start.videos;
+    const adsLive = m >= a.adStartMonth && allLive >= 100;
     const adSpend = adsLive ? a.adDaily * 30 : 0;
     if (adsLive && actualAdStartMonth === null) actualAdStartMonth = m;
-    let incremental = activeNew * gmvPerVideo * revenueRamp + adSpend * Math.min(a.roas, 2.5);
-    const rawIncremental = incremental;
-    if (m === 6) {
-      const cap = Math.min(a.guardrailMonth6, Math.max(0, (options.medianCompetitorGmv ?? a.guardrailMonth6 * 2) * .5));
-      incremental = Math.min(incremental, cap);
-      if (rawIncremental > cap) capNotes.push(`Month 6 capped at ${usd(cap)} by the launch guardrail.`);
+    // Sales follow live videos: GMV = live program videos x GMV per video. Ads support those videos;
+    // the competitor benchmark already includes their ad-driven sales, so ads add no GMV of their own.
+    let perVideo = gmvPerVideo * (VIDEO_REVENUE_RAMP[m - 1] ?? 1);
+    let capped = false;
+    if (!options.noCaps && live > 0) {
+      // Guardrails cap the program's incremental GMV, on top of what an existing shop already sells.
+      const ceiling = guardrailCeiling(m, cap6, cap12);
+      if (live * perVideo > ceiling) { perVideo = Math.max(0, ceiling) / live; capped = true; cappedFrom ??= m; }
     }
-    if (m === 12) {
-      const cap = Math.min(a.guardrailMonth12, options.medianCompetitorGmv ?? a.guardrailMonth12);
-      incremental = Math.min(incremental, cap);
-      if (rawIncremental > cap) capNotes.push(`Month 12 capped at ${usd(cap)} by the launch guardrail.`);
-    }
-    if (options.conservativeOf?.[m - 1]) incremental = Math.min(incremental, Math.max(0, options.conservativeOf[m - 1]!.gmv - start.gmv) * .5);
-    const gmv = start.gmv + incremental;
-    const programCost = a.sophieFee + delivered * econ.sampleUnitCost + adSpend;
+    const gmv = start.gmv + live * perVideo;
+    const sampleCost = delivered * econ.sampleUnitCost;
+    const programCost = a.sophieFee + sampleCost + adSpend;
     const contribution = gmv * margin;
     cumContrib += contribution; cumCost += programCost;
     const net = contribution - programCost;
-    affiliates += newVideos; cumNet += net;
+    cumNet += net;
     maxInvestment = Math.max(maxInvestment, -cumNet);
     if (newShop && m < 3 && net > 0) earlyProfitFlag = true;
     if (profitableMonth === null && net > 0 && (!newShop || m >= 3)) profitableMonth = m;
     if (breakEvenMonth === null && cumContrib >= cumCost && (!newShop || m >= 3)) breakEvenMonth = m;
-    rows.push({ month: m, samples: delivered, newVideos, cumVideos: active, gmv, programCost, net, affiliates, cumNet, adSpend });
+    rows.push({ month: m, samples: delivered, newVideos, totalVideos: total, cumVideos: allLive, affiliates: allLive * perCreator, gmvPerVideo: perVideo, gmv, sampleCost, programCost, net, cumNet, adSpend, capped });
   }
+  const capNotes = cappedFrom !== null ? [`GMV held at the launch guardrail from month ${cappedFrom} (${usd(cap6)} by month 6, ${usd(cap12)} by month 12).`] : [];
   const roi = cumCost > 0 ? ((cumContrib - cumCost) / cumCost) * 100 : 0;
-  return { samples, rows, breakEvenMonth, profitableMonth, maxInvestment, roi, cumContrib, cumCost, capNotes, earlyProfitFlag, actualAdStartMonth };
+  return { key: options.key ?? "pace", samples: schedule[PLAN_MONTHS - 1] ?? samples, rows, breakEvenMonth, profitableMonth, maxInvestment, roi, cumContrib, cumCost, capNotes, earlyProfitFlag, actualAdStartMonth };
+}
+
+/** Smallest monthly sample volume (step 10, floor 150) whose month-12 GMV reaches the target. */
+export function samplesForTarget(target: number, a: Assumptions, econ: Economics, gmvPerVideo: number, start = { gmv: 0, videos: 0 }, options: ProjectOptions = {}, max = 10000) {
+  const m12 = (n: number) => projectScenario(n, a, econ, gmvPerVideo, start, { ...options, noCaps: true }).rows[PLAN_MONTHS - 1]?.gmv ?? 0;
+  if (!(target > 0) || !(gmvPerVideo > 0) || m12(SAMPLE_FLOOR) >= target) return { samples: SAMPLE_FLOOR, feasible: gmvPerVideo > 0 };
+  if (m12(max) < target) return { samples: max, feasible: false };
+  let lo = SAMPLE_FLOOR / 10, hi = max / 10;
+  while (hi - lo > 1) { const mid = Math.floor((lo + hi) / 2); if (m12(mid * 10) >= target) hi = mid; else lo = mid; }
+  return { samples: hi * 10, feasible: true };
+}
+
+// ---------- same-brand merge ----------
+const BRAND_SUFFIX = /(officialshop|officialstore|official|shop|store)$/;
+const BRAND_PREFIX = /^(official|shop|store)/;
+const BRAND_DROP_WORDS = new Set(["official", "shop", "store", "us", "usa", "llc", "inc", "co", "the"]);
+/** Normalized brand key: lowercase, no punctuation or spaces, without official/shop/store/us. */
+export function brandKey(name: unknown): string {
+  const words = String(name ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").split(" ").filter((w) => w && !BRAND_DROP_WORDS.has(w));
+  let key = words.join("");
+  for (let i = 0; i < 3; i++) key = key.replace(BRAND_SUFFIX, "").replace(BRAND_PREFIX, "");
+  return key;
+}
+const sellerOf = (p: any) => p?.seller_name ?? p?.shop_name ?? p?.product_shop_name ?? "";
+const firstWordKey = (p: any) => brandKey(String(p?.product_name ?? "").trim().split(/\s+/)[0] ?? "");
+
+/** Groups indexes of products that belong to the same brand: same normalized seller, or a product
+ *  name whose first word is another product's normalized seller. */
+export function sameBrandGroups(products: any[]): number[][] {
+  const parent = products.map((_, i) => i);
+  const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i]!)));
+  const seller = products.map((p) => brandKey(sellerOf(p)));
+  const first = products.map(firstWordKey);
+  for (let i = 0; i < products.length; i++) for (let j = i + 1; j < products.length; j++) {
+    const si = seller[i]!, sj = seller[j]!, fi = first[i]!, fj = first[j]!;
+    const same = (si.length >= 3 && si === sj) || (sj.length >= 3 && fi === sj) || (si.length >= 3 && fj === si);
+    if (same) parent[find(j)] = find(i);
+  }
+  const groups = new Map<number, number[]>();
+  products.forEach((_, i) => { const r = find(i); groups.set(r, [...(groups.get(r) ?? []), i]); });
+  return [...groups.values()];
+}
+
+const SUM_FIELDS = ["revenue", "video_number", "creator_number", "live_number", "video_revenue", "live_revenue", "shopping_mall_revenue", "showcase_revenue", "sale", "sales_volumn", "sales_volume", "product_review_count"];
+/** Merge enriched competitors of the same brand into one row: counts and revenue add up, the
+ *  top-selling listing supplies name, price and image. */
+export function mergeSameBrand(entries: EnrichedProduct[]): EnrichedProduct[] {
+  const groups = sameBrandGroups(entries.map((e) => ({ ...e.product, ...(e.detail ?? {}), product_name: e.detail?.product_name ?? e.product?.product_name, seller_name: sellerOf(e.product) || sellerOf(e.detail) })));
+  return groups.map((idx) => {
+    const list = idx.map((i) => entries[i]!).sort((x, y) => toNum(y.detail?.revenue) - toNum(x.detail?.revenue));
+    const hero = list[0]!;
+    if (list.length === 1) return hero;
+    const sum = (pick: (e: EnrichedProduct) => any, field: string) => list.some((e) => pick(e)?.[field] !== undefined) ? list.reduce((n, e) => n + toNum(pick(e)?.[field]), 0) : undefined;
+    const detail: any = { ...hero.detail };
+    for (const f of SUM_FIELDS) { const v = sum((e) => e.detail, f); if (v !== undefined) detail[f] = v; }
+    const d90 = list.every((e) => e.detail90) ? { ...hero.detail90, revenue: list.reduce((n, e) => n + toNum(e.detail90?.revenue), 0) } : hero.detail90;
+    const product = { ...hero.product, revenue: list.reduce((n, e) => n + toNum(e.product?.revenue ?? e.detail?.revenue), 0), mergedListingIds: list.map((e) => productKey(e.product)), mergedCount: list.length };
+    const merged: EnrichedProduct = { ...hero, product, detail, detail90: d90, videos: list.flatMap((e) => e.videos ?? []), creators: list.flatMap((e) => e.creators ?? []), sellerRunVideoIds: list.flatMap((e) => e.sellerRunVideoIds ?? []), sellerRunCreatorIds: list.flatMap((e) => e.sellerRunCreatorIds ?? []) };
+    if (list.some((e) => e.newVideos !== undefined)) merged.newVideos = list.reduce((n, e) => n + (e.newVideos ?? 0), 0);
+    if (list.some((e) => e.newVideosCapped)) merged.newVideosCapped = true;
+    return merged;
+  });
+}
+
+/** Enriched, same-brand-merged competitors behind every report table, benchmark and the plan. */
+export function reportEntries(k: MarketData | null | undefined, answers: Answers): EnrichedProduct[] {
+  const raw = selectedCompetitors(k, answers).map((p) => k?.enriched?.[productKey(p)]).filter((e): e is EnrichedProduct => !!e?.detail && toNum(e.detail.revenue) > 0);
+  return mergeSameBrand(raw).filter((e) => k?.discovery?.version !== 2 || (toNum(e.detail.revenue) >= 5000 && (toNum(e.detail.creator_number) >= 5 || toNum(e.detail.video_number) >= 10)));
+}
+
+// ---------- category pace benchmark ----------
+export const shortName = (name: string) => {
+  const clean = String(name ?? "").replace(/[|,(].*$/, "").replace(/\s[-–—]\s.*$/, "").trim();
+  const words = clean.split(/\s+/).filter((w) => !/^(buy\d*|get\d*|\d+\s*pcs?|\d+-?pack|buy\d+get\d+)$/i.test(w)).slice(0, 4).join(" ");
+  return words || "This product";
+};
+/** The proof point: smallest selected product still doing at least $20K a month, else the median one. */
+export function pickPeer<T extends { gmv: number }>(items: T[]): T | undefined {
+  const sorted = [...items].sort((a, b) => a.gmv - b.gmv);
+  return sorted.find((p) => p.gmv >= 20000) ?? sorted[Math.floor((sorted.length - 1) / 2)];
+}
+
+export interface VelocityRow { name: string; gmv: number; videos: number; creators: number | null; newVideos: number | null; newVideosCapped: boolean; sellerShare: number; perVideo: number | null }
+/** One competitor's content velocity. Seller-run videos are taken out of both GMV and video count. */
+export function velocityOf(e: EnrichedProduct): VelocityRow {
+  const d = e.detail ?? {};
+  const gmv = toNum(d.revenue), videos = toNum(d.video_number);
+  const seller = new Set(e.sellerRunVideoIds ?? []);
+  const sampled = e.videos ?? [];
+  const sampledRevenue = sampled.reduce((n, v) => n + toNum(v.revenue), 0);
+  const sellerRevenue = sampled.filter((v) => seller.has(String(v.video_id))).reduce((n, v) => n + toNum(v.revenue), 0);
+  const sellerShare = sampledRevenue > 0 ? sellerRevenue / sampledRevenue : 0;
+  const affVideos = Math.max(0, videos - seller.size);
+  return { name: shortName(d.product_name ?? e.product?.product_name), gmv, videos, creators: d.creator_number === undefined ? null : toNum(d.creator_number), newVideos: e.newVideos ?? null, newVideosCapped: !!e.newVideosCapped, sellerShare,
+    perVideo: affVideos > 0 && gmv > 0 ? gmv * (1 - sellerShare) / affVideos : null };
+}
+
+export interface CategoryPace {
+  competitors: VelocityRow[];
+  /** Median over competitors of affiliate GMV per live video. */
+  gmvPerVideo: number;
+  creatorsPerVideo: number;
+  benchmark: VelocityRow | undefined;
+  targetGmv: number;
+  requiredLiveVideos: number;
+  requiredNewVideos: number;
+  videoRange: [number, number] | null;
+}
+export function categoryPace(entries: EnrichedProduct[], a: Pick<Assumptions, "decayPct" | "guardrailMonth12">, targetShare = 1): CategoryPace {
+  const competitors = entries.map(velocityOf).sort((x, y) => y.gmv - x.gmv);
+  const gmvPerVideo = median(competitors.map((c) => c.perVideo).filter((n): n is number => n !== null && n > 0));
+  const ratios = competitors.filter((c) => c.creators !== null && c.videos > 0).map((c) => (c.creators ?? 0) / c.videos);
+  const creatorsPerVideo = ratios.length ? Math.min(1, Math.max(0.1, median(ratios))) : DEFAULT_CREATORS_PER_VIDEO;
+  const benchmark = pickPeer(competitors);
+  const median12 = median(competitors.map((c) => c.gmv));
+  const targetGmv = Math.min((benchmark?.gmv ?? 0) * targetShare, a.guardrailMonth12, median12 || Infinity);
+  const requiredLiveVideos = gmvPerVideo > 0 ? targetGmv / gmvPerVideo : 0;
+  const vids = competitors.map((c) => c.videos).filter((n) => n > 0);
+  return { competitors, gmvPerVideo, creatorsPerVideo, benchmark, targetGmv, requiredLiveVideos, requiredNewVideos: requiredLiveVideos * a.decayPct / 100,
+    videoRange: vids.length ? [Math.min(...vids), Math.max(...vids)] : null };
+}
+
+export interface PathSummary { key: PathKey; label: string; samples: number; sampleCost: number; gmv: [number, number, number]; profit: [number, number, number] }
+export function pathSummary(s: Scenario): PathSummary {
+  const at = (m: number) => s.rows[m - 1];
+  return { key: s.key, label: s.label ?? s.key, samples: s.samples, sampleCost: at(PLAN_MONTHS)?.sampleCost ?? 0,
+    gmv: [at(3)?.gmv ?? 0, at(6)?.gmv ?? 0, at(12)?.gmv ?? 0], profit: [at(3)?.net ?? 0, at(6)?.net ?? 0, at(12)?.net ?? 0] };
 }
 
 // ---------- verdict ----------
@@ -534,27 +694,40 @@ export function computeAll(s: FullInput) {
   a.videoRatePct = (overrides.postRate ?? .40) * 100;
   a.guardrailMonth6 = overrides.guardrailMonth6 ?? DEFAULT_ASSUMPTIONS.guardrailMonth6;
   a.guardrailMonth12 = overrides.guardrailMonth12 ?? DEFAULT_ASSUMPTIONS.guardrailMonth12;
-  const targetAffiliates = Math.max(30, Math.ceil((data.market.affiliates ?? 0) * .25));
-  a.samplesPerMonth = overrides.samples ?? Math.max(150, Math.ceil(targetAffiliates / 6 / (a.videoRatePct / 100) / 10) * 10);
   a.roas = Math.min(2.5, overrides.roas ?? data.market.roas ?? 0);
-  const gmvPerVideo = data.market.robustTrimmedMean ?? 0;
+  const pace = categoryPace(data.entries, a);
+  // Content velocity drives the plan: GMV per live video comes from what competitors actually earn per video.
+  const gmvPerVideo = pace.gmvPerVideo > 0 ? pace.gmvPerVideo : (data.market.robustTrimmedMean ?? 0);
   const method: Fulfillment = s.branch === "optimize" ? (s.answers.fulfillment ?? "fbt") : "fbt";
   const products = s.products.length ? s.products : [emptyProduct()];
   const start = s.branch === "optimize" ? { gmv: data.own.reduce((n,p) => n + (p.gmv ?? 0), 0), videos: data.own.reduce((n,p) => n + (p.videos ?? 0), 0) } : {gmv: 0, videos: 0};
   const newShop = s.branch === "launch" || s.answers.probation === "yes";
-  const month3Organic = a.samplesPerMonth * a.videoRatePct / 100 * (1 + .65 + .65 ** 2) * gmvPerVideo * .5;
-  a.adDaily = Math.max(100, month3Organic * .10 / 30);
+  const medianCompetitorGmv = data.market.gmv ?? 0;
+  const opts = { medianCompetitorGmv, newShop, creatorsPerVideo: pace.creatorsPerVideo };
+  const econ0 = economics(products, a, method);
+  const solved = samplesForTarget(Math.max(0, pace.targetGmv - start.gmv), a, econ0, gmvPerVideo, { gmv: 0, videos: 0 }, opts);
+  const paceSamples = solved.samples;
+  const chosenSamples = Math.max(SAMPLE_FLOOR, overrides.samples ?? paceSamples);
+  a.samplesPerMonth = chosenSamples;
+  const month3Organic = chosenSamples * a.videoRatePct / 100 * (1 + .65 + .65 ** 2) * gmvPerVideo * .5;
+  a.adDaily = Math.max(100, Math.round(month3Organic * .10 / 30));
   const econ = economics(products, a, method);
   const niche = productMarketStats(s.kalodata, s.answers);
   const bench = {hasData: data.hasData, categoryGmv: niche.gmv, medianPrice: data.market.price ?? 0, medianCommission: data.market.commission ?? 0, avgCreators: data.market.affiliates ?? 0, avgVideos: data.market.videos ?? 0, gmvPerCreator: data.market.gmvPerAffiliate ?? 0, gmvPerVideo, affiliateShare: a.affiliateSharePct};
-  const medianCompetitorGmv = data.market.gmv ?? 0;
   let scenarios: Scenario[] = [];
   if (data.hasData) {
-    const target = {...projectScenario(a.samplesPerMonth, a, econ, gmvPerVideo, start, {medianCompetitorGmv,newShop}), label: "Target"};
-    const conservative = {...projectScenario(a.samplesPerMonth, a, econ, data.market.robustMedian ?? 0, start, {medianCompetitorGmv,newShop,conservativeOf:target.rows}), label: "Conservative"};
-    scenarios = [target, conservative];
-    a.adStartMonth = target.actualAdStartMonth ?? 3;
+    const chosen = {...projectScenario(chosenSamples, a, econ, gmvPerVideo, start, { ...opts, key: "pace" }), label: overrides.samples ? "Team plan" : "Category pace"};
+    const minimum = {...projectScenario(SAMPLE_FLOOR, a, econ, gmvPerVideo, start, { ...opts, key: "minimum" }), label: "Minimum"};
+    scenarios = [chosen, minimum];
+    a.adStartMonth = chosen.actualAdStartMonth ?? 3;
   }
+  const plan = {
+    floor: SAMPLE_FLOOR, paceSamples, chosenSamples, feasible: solved.feasible, gmvPerVideo, creatorsPerVideo: pace.creatorsPerVideo,
+    benchmark: pace.benchmark, targetGmv: pace.targetGmv, requiredLiveVideos: pace.requiredLiveVideos, requiredNewVideos: pace.requiredNewVideos,
+    videoRange: pace.videoRange, competitors: pace.competitors,
+    sampleUnitCost: econ.sampleUnitCost,
+    paths: scenarios.map(pathSummary),
+  };
   const profitAvailable = products.every((p) => p.cogs > 0);
   const earlyProfitFlag = scenarios.some((scenario) => scenario.earlyProfitFlag);
   const capNotes = [...new Set(scenarios.flatMap((scenario) => scenario.capNotes))];
@@ -573,7 +746,7 @@ export function computeAll(s: FullInput) {
     return { product: p.name || `Product ${i + 1}`, opts, cheapest };
   });
   const v = computeVerdict({ branch: s.branch, answers: s.answers, products, avgMarginFloor: econ.avgMarginFloor });
-  return { insights: data, targetAffiliates, adjusted: !!s.kalodata?.adjustedAt, assumptions: a, method, econ, bench, gmvPerVideo, scenarios, unitsPerProduct, fulfillment, verdict: v, profitAvailable, earlyProfitFlag, capNotes };
+  return { insights: data, adjusted: !!s.kalodata?.adjustedAt, assumptions: a, method, econ, bench, gmvPerVideo, plan, scenarios, unitsPerProduct, fulfillment, verdict: v, profitAvailable, earlyProfitFlag, capNotes };
 }
 
 
@@ -618,8 +791,7 @@ export function creatorInsights(creators: any[]) {
   return {rows,buckets, leader: total ? leader?.label : undefined, videoShare: total ? rows.reduce((n,c)=>n+toNum(c.video_revenue),0)/total*100 : null, liveShare: total ? rows.reduce((n,c)=>n+toNum(c.live_revenue),0)/total*100 : null};
 }
 export function competitorInsights(k: MarketData | null | undefined, answers: Answers) {
-  const selected = selectedCompetitors(k, answers);
-  const entries = selected.map(p => k?.enriched?.[productKey(p)]).filter((e): e is EnrichedProduct => !!e?.detail && toNum(e.detail.revenue)>0 && (k?.discovery?.version !== 2 || (toNum(e.detail.revenue) >= 5000 && (toNum(e.detail.creator_number) >= 5 || toNum(e.detail.video_number) >= 10))));
+  const entries = reportEntries(k, answers);
   const products = entries.map(enrichedMetrics);
   const fields = ['gmv','price','commission','affiliates','newVideos','videos','lives','videoShare','liveShare','shopShare','adsShare','roas','adRevenueRatio','gmvPerAffiliate','gmvPerVideo','robustMedian','robustTrimmedMean','hitRate'] as const;
   const market = Object.fromEntries(fields.map(field => {const values=products.map(p=>p[field]).filter((n): n is number => n !== null); return [field,values.length ? median(values):null];})) as Record<typeof fields[number],number|null>;
@@ -633,5 +805,5 @@ export function competitorInsights(k: MarketData | null | undefined, answers: An
   market.roas=adsMetrics.roas;
   const topVideos = allVideos.sort((a,b)=>toNum(b.revenue)-toNum(a.revenue)).slice(0,10).map(v=>({...v,displayTitle:englishHook(v.video_title),followers:creators.rows.find(c=>String(c.creator_id)===String(v.belonged_creator_id) || c.creator_handle===v.belonged_creator_handle)?.creator_followers}));
   const ownEntries = Object.values(k?.ownEnriched??{}).filter(e=>e.detail && toNum(e.detail.revenue)>0);
-  return {products, market, hasData: products.length>=2 && products.filter(p=>p.robustTrimmedMean !== null).length>=2, topVideos, creators, ads: adsMetrics, own: ownEntries.map(enrichedMetrics), ownCreators: creatorInsights(ownEntries.flatMap(e=>e.creators??[])), ownAds: videoInsights(ownEntries.flatMap(e=>e.videos??[])), sellerRunVideoCount: entries.reduce((n,e)=>n+(e.sellerRunVideoIds?.length??0),0)};
+  return {entries, products, market, hasData: products.length>=2 && products.filter(p=>p.robustTrimmedMean !== null).length>=2, topVideos, creators, ads: adsMetrics, own: ownEntries.map(enrichedMetrics), ownCreators: creatorInsights(ownEntries.flatMap(e=>e.creators??[])), ownAds: videoInsights(ownEntries.flatMap(e=>e.videos??[])), sellerRunVideoCount: entries.reduce((n,e)=>n+(e.sellerRunVideoIds?.length??0),0)};
 }

@@ -5,7 +5,8 @@ import { productMarketStats, productKey, ratePct, toNum, usd, num, pct, candidat
 import { formatGrowth, groupCompetitors, nicheStats, relevanceOf, type Relevance } from '@/lib/discovery';
 import { addMarketCompetitor, editMarketTerms, findMarketCompetitors } from '@/lib/fit.functions';
 import { Stat, Note, GhostBtn, PrimaryBtn, TextInput } from './ui';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
+import { priceBands } from '@/lib/deck';
+import { PriceBandChart } from './price-bands';
 import { MarketInsights, SourceLine } from './insights';
 import { competitorInsights } from '@/lib/calc';
 import { cn } from '@/lib/utils';
@@ -51,22 +52,11 @@ export function MarketShare({ k, answers }: { k: MarketData | null; answers: Ans
 
 export function PriceBands({ k, answers, title = 'Price bands' }: { k: MarketData | null; answers: Answers; title?: string }) {
   const stats = marketStats(k, answers);
-  const prices = stats.products.map(p => toNum(p.unit_price)).filter(n => n > 0);
-  const maxPrice = Math.max(...prices, answers.marketPrice ?? 0, 1);
-  const bandWidth = Math.ceil(maxPrice / 5 / 5) * 5;
-  const bands = Array.from({ length: 5 }, (_, i) => ({ price: (i + .5) * bandWidth, count: prices.filter(p => p >= i * bandWidth && (i === 4 ? p <= (i + 1) * bandWidth : p < (i + 1) * bandWidth)).length }));
+  const data = priceBands(stats.products.map(p => ({ price: toNum(p.unit_price), units: toNum(p.sales_volumn ?? p.sales_volume) })), answers.marketPrice);
+  if (!data) return null;
   return <section className="space-y-4">
     <h3 className="text-xl">{title}</h3>
-    <div className="h-64">
-      <ResponsiveContainer width="100%" height="100%"><BarChart data={bands}>
-        <XAxis dataKey="price" type="number" domain={[0, bandWidth * 5]} tickFormatter={v => usd(v)} />
-        <YAxis allowDecimals={false} width={30} />
-        <Tooltip labelFormatter={v => `${usd(Number(v) - bandWidth / 2)} to ${usd(Number(v) + bandWidth / 2)}`} formatter={v => [v, 'Products']} />
-        <Bar dataKey="count" fill="var(--signal)" barSize={40} isAnimationActive={false} />
-        {answers.marketPrice !== undefined && <ReferenceLine x={answers.marketPrice} stroke="var(--navy)" strokeWidth={2} label={{ value: 'Your price', fill: 'var(--navy)', position: 'insideTopRight' }} />}
-      </BarChart></ResponsiveContainer>
-    </div>
-    {answers.marketPrice !== undefined && <p className="text-xs text-caption">Your price: {usd(answers.marketPrice, 2)}</p>}
+    <PriceBandChart data={data} price={answers.marketPrice} />
     <SourceLine />
   </section>;
 }

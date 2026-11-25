@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Bar, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { CheckCircle2, ChevronDown } from "lucide-react";
 import { computeAll, opportunitySignals, num, pct, usd, PLAN_MONTHS, type Answers, type MarketData, type Product } from "@/lib/calc";
@@ -11,11 +11,10 @@ import { FulfillmentSection } from "./sections";
 import { Eyebrow, GhostBtn, Note, Stat } from "./ui";
 
 type R = ReturnType<typeof computeAll>;
-const SCENARIOS = ["Target", "Conservative"] as const;
 const short = (n: number): string => n < 0 ? `-${short(-n)}` : n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `$${Math.round(n / 1e3)}K` : usd(n);
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const monthLabel = (m: number | null) => (m ? `Month ${m}` : `After month ${PLAN_MONTHS}`);
-export const scenarioOf = (r: R, label = "Target") => r.scenarios.find((s) => s.label === label);
+export const scenarioOf = (r: R, key: "pace" | "minimum" = "pace") => r.scenarios.find((s) => s.key === key);
 
 export function Collapse({ label, children }: { label: string; children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
@@ -23,7 +22,7 @@ export function Collapse({ label, children }: { label: string; children: React.R
     <GhostBtn type="button" className="no-print h-9 text-sm" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
       {label} <ChevronDown className={cn("h-4 w-4 transition", open && "rotate-180")} />
     </GhostBtn>
-    <div className={cn(open ? "block" : "hidden", "print:block")}>{children}</div>
+    <div className={cn("collapse-body", open ? "block" : "hidden", "print:block")}>{children}</div>
   </div>;
 }
 
@@ -35,25 +34,28 @@ function Section({ eyebrow, title, children }: { eyebrow: string; title: string;
 }
 
 export function ProfitChart({ r }: { r: R }) {
-  const [label, setLabel] = useState<string>("Target");
-  const s = scenarioOf(r, label) ?? r.scenarios[0];
+  const [key, setKey] = useState<"pace" | "minimum">("pace");
+  const gradientId = `profitTone${useId().replace(/[^a-zA-Z0-9]/g, "")}`;
+  const s = scenarioOf(r, key) ?? r.scenarios[0];
   if (!s) return null;
+  const label = `${s.label ?? "Plan"}, ${num(s.samples)} samples a month`;
+  const options = r.scenarios.filter((x, i, all) => x.key === "pace" || x.samples !== all[0]?.samples);
   const data = s.rows.map((row) => ({ month: `M${row.month}`, gmv: Math.round(row.gmv), profit: Math.round(row.net), cum: Math.round(row.cumNet) }));
-  if (!r.profitAvailable) return <div className="bento space-y-4 p-5"><div className="eyebrow">Monthly GMV, {label} scenario</div><div className="h-80"><ResponsiveContainer><ComposedChart data={data}><CartesianGrid stroke="var(--border)" vertical={false} /><XAxis dataKey="month" /><YAxis tickFormatter={(v) => short(Number(v))} /><Tooltip formatter={(v: number) => usd(v)} /><Bar dataKey="gmv" fill="var(--navy)" isAnimationActive={false} /></ComposedChart></ResponsiveContainer></div><Note>Add your product cost to see profit.</Note></div>;
+  if (!r.profitAvailable) return <div className="bento space-y-4 p-5"><div className="eyebrow">Monthly GMV, {label}</div><div className="h-80"><ResponsiveContainer><ComposedChart data={data}><CartesianGrid stroke="var(--border)" vertical={false} /><XAxis dataKey="month" /><YAxis tickFormatter={(v) => short(Number(v))} /><Tooltip formatter={(v: number) => usd(v)} /><Bar dataKey="gmv" fill="var(--navy)" isAnimationActive={false} /></ComposedChart></ResponsiveContainer></div><Note>Add your product cost to see profit.</Note></div>;
   const max = Math.max(...data.map((d) => d.profit)), min = Math.min(...data.map((d) => d.profit));
   const offset = max <= 0 ? 0 : min >= 0 ? 1 : max / (max - min);
   return <div className="bento space-y-4 p-5">
     <div className="flex flex-wrap items-center justify-between gap-3">
-      <div className="eyebrow">Monthly GMV and profit, {label} scenario</div>
+      <div className="eyebrow">Monthly GMV and profit, {label}</div>
       <div className="no-print flex gap-1" role="group" aria-label="Scenario">
-        {SCENARIOS.filter((x) => scenarioOf(r, x)).map((x) => <button key={x} type="button" aria-pressed={label === x} onClick={() => setLabel(x)}
-          className={cn("rounded-full border px-3 py-1 text-xs font-semibold", label === x ? "border-navy bg-navy text-primary-foreground" : "border-border text-navy")}>{x}</button>)}
+        {options.length > 1 && options.map((x) => <button key={x.key} type="button" aria-pressed={key === x.key} onClick={() => setKey(x.key)}
+          className={cn("rounded-full border px-3 py-1 text-xs font-semibold", key === x.key ? "border-navy bg-navy text-primary-foreground" : "border-border text-navy")}>{x.label}</button>)}
       </div>
     </div>
     <div className="h-80">
       <ResponsiveContainer>
         <ComposedChart data={data} margin={{ top: 28, right: 12, left: 0, bottom: 0 }}>
-          <defs><linearGradient id="profitTone" x1="0" y1="0" x2="0" y2="1"><stop offset={offset} stopColor="var(--growth)" /><stop offset={offset} stopColor="var(--gold)" /></linearGradient></defs>
+          <defs><linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1"><stop offset={offset} stopColor="var(--growth)" /><stop offset={offset} stopColor="var(--gold)" /></linearGradient></defs>
           <CartesianGrid stroke="var(--border)" vertical={false} />
           <XAxis dataKey="month" tick={{ fontSize: 12 }} />
           <YAxis tickFormatter={(v) => short(Number(v))} tick={{ fontSize: 12 }} width={56} />
@@ -62,7 +64,7 @@ export function ProfitChart({ r }: { r: R }) {
           {s.profitableMonth && <ReferenceLine x={`M${s.profitableMonth}`} stroke="var(--growth)" strokeDasharray="3 3" label={{ value: `Profitable month: Month ${s.profitableMonth}`, position: "top", fill: "var(--navy)", fontSize: 11 }} />}
           {s.breakEvenMonth && <ReferenceLine x={`M${s.breakEvenMonth}`} stroke="var(--signal)" strokeDasharray="3 3" label={{ value: `Investment paid back: Month ${s.breakEvenMonth}`, position: "insideTopRight", fill: "var(--navy)", fontSize: 11 }} />}
           <Bar dataKey="gmv" fill="var(--navy)" barSize={22} isAnimationActive={false} />
-          <Line dataKey="profit" stroke="url(#profitTone)" strokeWidth={3} dot={false} isAnimationActive={false} />
+          <Line dataKey="profit" stroke={`url(#${gradientId})`} strokeWidth={3} dot={false} isAnimationActive={false} />
           <Line dataKey="cum" stroke="var(--signal)" strokeDasharray="6 4" strokeWidth={2} dot={false} isAnimationActive={false} />
         </ComposedChart>
       </ResponsiveContainer>
@@ -78,14 +80,14 @@ export function ProfitChart({ r }: { r: R }) {
     </div>
     <Collapse label="See month by month">
       <div className="overflow-x-auto"><table className="w-full min-w-[760px] text-sm">
-        <thead><tr className="text-left text-caption">{["Month", "Samples", "New videos", "Active affiliates", "GMV", "Total costs", "Monthly profit", "Cumulative profit"].map((h) => <th key={h} className="py-2 pr-3">{h}</th>)}</tr></thead>
+        <thead><tr className="text-left text-caption">{["Month", "Samples", "New videos", "Videos live", "Active affiliates", "GMV per video", "GMV", "Sample cost", "Total costs", "Monthly profit", "Cumulative profit"].map((h) => <th key={h} className="py-2 pr-3">{h}</th>)}</tr></thead>
         <tbody>{s.rows.map((row) => <tr key={row.month} className="border-t border-border">
-          <td className="py-1.5">{row.month}</td><td>{num(row.samples)}</td><td>{num(row.newVideos)}</td><td>{num(row.affiliates)}</td>
-          <td className="font-semibold text-navy">{usd(row.gmv)}</td><td>{usd(row.gmv - row.net)}</td><td>{usd(row.net)}</td><td>{usd(row.cumNet)}</td>
+          <td className="py-1.5">{row.month}</td><td>{num(row.samples)}</td><td>{num(row.newVideos)}</td><td>{num(row.cumVideos)}</td><td>{num(row.affiliates)}</td><td>{usd(row.gmvPerVideo)}{row.capped ? " *" : ""}</td>
+          <td className="font-semibold text-navy">{usd(row.gmv)}</td><td>{usd(row.sampleCost)}</td><td>{usd(row.programCost)}</td><td>{usd(row.net)}</td><td>{usd(row.cumNet)}</td>
         </tr>)}</tbody>
       </table></div>
     </Collapse>
-    <p className="text-xs text-caption">Sophie's revenue share applies only above $100K GMV/month and is not included here.</p>
+    <p className="text-xs text-caption">GMV = videos live x GMV per video{s.rows.some((x) => x.capped) ? ". * held at the launch guardrail" : ""}. Total costs = Sophie fee, samples and ads. Sophie's revenue share applies only above $100K GMV/month and is not included here.</p>
   </div>;
 }
 
@@ -130,7 +132,7 @@ export function Story({ r, k, answers, brand, products, marketOnly = false, popu
       </p>
       <div className={cn("mt-8 grid gap-6", hasPlan ? "sm:grid-cols-3" : "sm:grid-cols-1")}>
         <div><div className="text-sm text-primary-foreground/70">Market size, 30 days</div><div className="text-4xl font-bold">{short(o.gmv)}</div></div>
-        {hasPlan && <><div><div className="text-sm text-primary-foreground/70">Your month-12 GMV (Target)</div><div className="text-4xl font-bold">{short(m12?.gmv ?? 0)}</div></div>
+        {hasPlan && <><div><div className="text-sm text-primary-foreground/70">Your month-12 GMV ({base?.label ?? "plan"})</div><div className="text-4xl font-bold">{short(m12?.gmv ?? 0)}</div></div>
           <div><div className="text-sm text-primary-foreground/70">Profitable from</div><div className="text-4xl font-bold">{monthLabel(base?.profitableMonth ?? null)}</div></div></>}
       </div>
       {hasPlan && <p className="mt-6 border-t border-primary-foreground/20 pt-4">Launch with {commission}% commission and {num(a.samplesPerMonth)} samples a month, start ads in month {a.adStartMonth}.</p>}
@@ -156,7 +158,7 @@ export function Story({ r, k, answers, brand, products, marketOnly = false, popu
     {hasPlan && base && <>
       <Section eyebrow="Your plan" title="Three phases to month 12">
         <div className="grid gap-4 lg:grid-cols-3">
-          <Phase n={1} name="Launch" months="Months 1-2" items={[`Set commission at ${commission}%${r.adjusted ? " (team adjusted)" : " (market median)"}.`, `Send ${num(a.samplesPerMonth)} samples a month.`, `Target creators with ${creators}.`]} goal={`${num(rows[1]?.affiliates ?? 0)} videos live and first sales.`} />
+          <Phase n={1} name="Launch" months="Months 1-2" items={[`Set commission at ${commission}%${r.adjusted ? " (team adjusted)" : " (market median)"}.`, `Send ${num(a.samplesPerMonth)} samples a month.`, `Target creators with ${creators}.`]} goal={`${num(rows[1]?.cumVideos ?? 0)} videos live and first sales.`} />
           <Phase n={2} name="Build" months="Months 3-6" items={[`Keep ${num(a.samplesPerMonth)} samples a month.`, "Run a monthly creator challenge.", `Start GMV Max at ${usd(a.adDaily)}/day targeting ${a.roas ? `${a.roas.toFixed(1)}x` : "market"} ROAS.`]} goal={`${num(rows[5]?.affiliates ?? 0)} active affiliates and ${usd(rows[5]?.gmv ?? 0)} GMV/month by month 6.`} />
           <Phase n={3} name="Scale" months="Months 7-12" items={["Scale winning creators and videos with Spark codes.", "Add lives with top creators.", "Add products to the shop."]} goal={`${usd(m12?.gmv ?? 0)} GMV/month by month 12.`} />
         </div>

@@ -71,7 +71,7 @@ function Report() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-12 px-5 pb-16">
+    <div className="report-root mx-auto max-w-5xl space-y-12 px-5 pb-16">
       <div className="no-print flex flex-wrap items-center justify-between gap-3">
         <TeamToggle id={id} onUnlock={setTeamPass} />
         <div className="flex gap-2">
@@ -101,10 +101,10 @@ function Report() {
         {!k.category?.attempted && <p className="no-print text-sm text-caption">Loading category totals...</p>}
         <DeckView r={r} k={k} answers={answers} brand={row.brand_name ?? ""} branch={row.branch} price={answers.marketPrice ?? products[0]?.price} team={!!teamPass} hidePricing={hidePricing} presenting={presenting} onExit={exitPresent} />
         <div className="no-print"><BookCall popup /></div>
-        <p className="text-xs text-caption">Market data: Kalodata, TikTok Shop US. Projections are estimates based on competitor benchmarks, not guarantees.</p>
+        <p className="no-print text-xs text-caption">Market data: Kalodata, TikTok Shop US. Projections are estimates based on competitor benchmarks, not guarantees.</p>
       </>}
       {marketOnly && <Link to="/fit/$id" params={{id}} className="no-print font-semibold text-signal">Explore your plan</Link>}
-      {!marketOnly && products.length === 0 && <p className="text-xs text-caption">No products entered yet, figures use defaults.</p>}
+      {!marketOnly && products.length === 0 && <p className="no-print text-xs text-caption">No products entered yet, figures use defaults.</p>}
     </div>
   );
 }

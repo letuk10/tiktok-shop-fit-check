@@ -75,6 +75,7 @@
   --color-growth: var(--growth);
   --color-drive: var(--drive);
   --color-gold: var(--gold);
+  --color-orange: var(--orange);
   --color-cloud: var(--cloud);
   --color-cream: var(--cream);
   --color-body: var(--body);
@@ -89,6 +90,7 @@
   --growth: oklch(0.78 0.14 125);
   --drive: var(--signal);
   --gold: oklch(0.79 0.14 80);
+  --orange: oklch(0.671 0.168 42.9);
   --cloud: oklch(0.951 0 0);
   --cream: oklch(0.982 0.03 100);
   --body: oklch(0.4 0.025 240);
@@ -164,17 +166,27 @@
   .slide { aspect-ratio: 16 / 9; }
 }
 
-@page deck { size: landscape; margin: 8mm; }
+/* Deck PDF: one 1920 x 1080 page per slide, laid out by the print copy in deck.tsx. */
+@page deck { size: 1920px 1080px; margin: 0; }
+.print-deck { position: absolute; left: -100000px; top: 0; width: 1920px; visibility: hidden; pointer-events: none; }
+.print-page { width: 1920px; height: 1080px; overflow: hidden; }
+/* The print copy shows what print shows, so its fit-to-slide measurement matches the PDF. */
+.print-deck .no-print { display: none !important; }
+.print-deck .collapse-body { display: block !important; }
 
 @media print {
   @page { size: auto; margin: 14mm; }
-  .deck { page: deck; }
-  .deck > .deck-slide { break-after: page; break-inside: avoid; }
-  .deck > .deck-slide:last-child { break-after: auto; }
-  .deck .slide { aspect-ratio: auto; min-height: 180mm; border-radius: 0; }
+  html, body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .no-print { display: none !important; }
+  .report-root:has(.print-deck) { max-width: none !important; margin: 0 !important; padding: 0 !important; }
+  body:has(.print-deck) main, body:has(.print-deck) main > * { margin: 0 !important; padding: 0 !important; max-width: none !important; }
+  body:has(.print-deck) .min-h-screen { min-height: 0 !important; }
+  html:has(.print-deck), body:has(.print-deck) { page: deck; margin: 0 !important; }
+  body:has(.print-deck) [data-sonner-toaster], body:has(.print-deck) section[aria-label^="Notifications"] { display: none !important; }
+  .print-deck { position: static; left: auto; visibility: visible; page: deck; margin: 0 !important; width: 1920px; }
+  .print-page { break-after: page; break-inside: avoid; transform: none; }
+  .print-page:last-child { break-after: auto; }
   .bento { break-inside: avoid; }
   .story-section { break-before: page; }
   .story > .story-section:first-child { break-before: auto; }
-  body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }

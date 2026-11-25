@@ -135,7 +135,7 @@ function RootComponent() {
         <main className="flex-1">
           <Outlet />
         </main>
-        <footer className="mx-auto w-full max-w-5xl px-5 py-8 text-xs text-caption">Sophie Society · TikTok Shop</footer>
+        <footer className="no-print mx-auto w-full max-w-5xl px-5 py-8 text-xs text-caption">Sophie Society · TikTok Shop</footer>
       </div>
       <Toaster />
     </QueryClientProvider>

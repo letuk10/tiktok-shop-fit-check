@@ -1,23 +1,13 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // Pure data for the partner plan deck. Every headline and tile derives from cached Kalodata and plan numbers.
-import { computeAll, enrichedMetrics, median, productKey, productMarketStats, selectedCompetitors, toNum, type Answers, type MarketData } from "./calc";
+import { computeAll, enrichedMetrics, median, pickPeer, productMarketStats, reportEntries, shortName, toNum, type Answers, type MarketData } from "./calc";
 import { formatGrowth } from "./discovery";
 
 type R = ReturnType<typeof computeAll>;
 export const short = (n: number): string => n < 0 ? `-${short(-n)}` : n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `$${Math.round(n / 1e3)}K` : `$${Math.round(n)}`;
 export const sharePct = (n: number) => n > 0 && n < 0.01 ? "under 0.01%" : n >= 10 ? `${Math.round(n)}%` : n >= 1 ? `${n.toFixed(1)}%` : `${n.toFixed(2)}%`;
 export const signed = (n: number) => `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`;
-export const shortName = (name: string) => {
-  const clean = String(name ?? "").replace(/[|,(].*$/, "").replace(/\s[-–—]\s.*$/, "").trim();
-  const words = clean.split(/\s+/).filter((w) => !/^(buy\d*|get\d*|\d+\s*pcs?|\d+-?pack|buy\d+get\d+)$/i.test(w)).slice(0, 4).join(" ");
-  return words || "This product";
-};
-
-/** The best peer: smallest selected product still doing at least $20K a month, else the median one. */
-export function pickPeer<T extends { gmv: number }>(items: T[]): T | undefined {
-  const sorted = [...items].sort((a, b) => a.gmv - b.gmv);
-  return sorted.find((p) => p.gmv >= 20000) ?? sorted[Math.floor((sorted.length - 1) / 2)];
-}
+export { shortName, pickPeer };
 
 /** Bucket units into $5 bands and find the densest $10 range. */
 export function priceZone(items: { price: number; units: number }[]) {
@@ -63,7 +53,7 @@ export function buildDeck(r: R, k: MarketData | null, answers: Answers, opts: { 
   const d = r.insights;
   const asOf = new Date(k?.fetchedAt ?? now).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
   const source = (days: 30 | 90) => `Source: Kalodata, TikTok Shop US, ${days} days to ${asOf}.`;
-  const entries = selectedCompetitors(k, answers).map((p) => k?.enriched?.[productKey(p)]).filter((e): e is NonNullable<typeof e> => !!e?.detail && toNum(e.detail.revenue) > 0);
+  const entries = reportEntries(k, answers);
   const products = entries.map((e) => {
     const m = enrichedMetrics(e);
     const d90 = e.detail90 && toNum(e.detail90.revenue) > 0 ? toNum(e.detail90.revenue) : null;
@@ -122,10 +112,20 @@ export function buildDeck(r: R, k: MarketData | null, answers: Answers, opts: { 
   const priceWhere = !price || !zone ? null : price < zone.lo ? "below" : price > zone.hi ? "above" : "inside";
 
   const a = r.assumptions;
-  const base = r.scenarios.find((s) => s.label === "Target");
-  const cons = r.scenarios.find((s) => s.label === "Conservative");
+  // The chosen path (category pace, or the team's sample volume) drives every plan slide.
+  const base = r.scenarios.find((s) => s.key === "pace");
+  const minimum = r.scenarios.find((s) => s.key === "minimum");
   const six = (s?: typeof base) => (s?.rows ?? []).slice(0, 6);
-  const sixTarget = six(base).reduce((n, x) => n + x.gmv, 0), sixCons = six(cons).reduce((n, x) => n + x.gmv, 0);
+  const sixTarget = six(base).reduce((n, x) => n + x.gmv, 0), sixMinimum = six(minimum).reduce((n, x) => n + x.gmv, 0);
+  const plan = r.plan;
+  const benchName = plan.benchmark?.name ?? peer?.name ?? "the proof point";
+  const paths = plan.paths;
+  const sellerRun = new Set(entries.flatMap((e) => e.sellerRunVideoIds ?? []));
+  // Top 15 affiliate videos of each competitor, so one brand's replies cannot crowd out every hook.
+  const hookPool = entries.flatMap((e) => (e.videos ?? []).filter((v) => !sellerRun.has(String(v.video_id))).sort((x, y) => toNum(y.revenue) - toNum(x.revenue)).slice(0, 15)).sort((x, y) => toNum(y.revenue) - toNum(x.revenue));
+  const hookSet = pickHooks(hookPool, entries.map((e) => String(e.detail?.product_name ?? e.product?.product_name ?? "")), cat?.name, k?.discovery?.core || "it");
+  const bands = priceBands(market.map((p) => ({ price: toNum(p.unit_price), units: toNum(p.sales_volumn ?? p.sales_volume) })), opts.price);
+  const nicheCounts = { products: nicheData.productCount, sellers: nicheData.sellerCount, units: nicheData.units, avgOrder: nicheData.units > 0 ? niche / nicheData.units : null };
   const m6 = six(base)[5]?.gmv ?? 0;
   const m6Share = niche > 0 ? m6 / niche * 100 : 0;
   const tiers = beyondScenarios(niche, peerShare, leaderShare);
@@ -154,6 +154,86 @@ export function buildDeck(r: R, k: MarketData | null, answers: Answers, opts: { 
     if (answers.probation === "yes") blockers.push({ blocker: "Probation cap", today: "Creator outreach is capped while the shop is in probation", fix: "Clear probation first, then open outreach" });
   }
 
-  return { brand, optimize, source, asOf, products, niche, top10Share, competition: competitionWord(top10Share), cat, own, ownGmv, ownGmv90, ownShare, ownVideos, ownCreators, ownCommission, ownPerVideo, peerPerVideo, peer, peerShare, leader, leaderShare, mostVideos, smallPerK, largePerK, topVideo, topFollowers: topVideo ? followersOf(topVideo) : null, zone, priceWhere, bundles, bundleShare, price, base, cons, sixTarget, sixCons, m6, m6Share, tiers, amazon, sellsAmazon, lead, liveShare, openLive, q4Soon, commission, blockers, shelf, topVideos: d.topVideos, creators: d.creators, a, peerVideos };
+  return { brand, optimize, source, asOf, products, niche, top10Share, competition: competitionWord(top10Share), cat, own, ownGmv, ownGmv90, ownShare, ownVideos, ownCreators, ownCommission, ownPerVideo, peerPerVideo, peer, peerShare, leader, leaderShare, mostVideos, smallPerK, largePerK, topVideo, topFollowers: topVideo ? followersOf(topVideo) : null, zone, priceWhere, bundles, bundleShare, price, base, minimum, sixTarget, sixMinimum, m6, plan, benchName, paths, hooks: hookSet.hooks, genericHooks: hookSet.generic, bands, nicheCounts, m6Share, tiers, amazon, sellsAmazon, lead, liveShare, openLive, q4Soon, commission, blockers, shelf, topVideos: d.topVideos, creators: d.creators, a, peerVideos };
 }
 export type Deck = ReturnType<typeof buildDeck>;
+
+// ---------- hooks ----------
+const REPLY = /^\s*(replying to|reply to|respuesta a|respondiendo a)\b/i;
+const SPANISH = /\b(?:de|la|el|los|las|para|que|es|con|y|una|un|mi|tu|piel|crema|sebo|cebo|res|esta|este|muy|por|lo|se|no|como|pero|amiga|así|aquí|acá)\b/gi;
+const ENGLISH = /\b(?:the|and|for|with|this|that|your|you|how|why|best|skin|get|my|is|to|of|i|it|in|on|what|when|finally|before|after|wish|knew|have|works|tried|need|stop)\b/gi;
+const STRONG = /\?|!|\b(?:i|you|my|your|this|why|how|stop|wish|finally|before|after|never|secret|tried|need|works|changed|best)\b|\d/i;
+const words = (t: string) => t.toLowerCase().replace(/[^a-z0-9@\s']/g, " ").split(/\s+/).filter(Boolean);
+
+/** Clean one video title into a usable hook, or null when it is a reply, a mention, non-English or just a product name. */
+export function cleanHook(title: unknown, productNames: string[] = [], max = 60): string | null {
+  let text = String(title ?? "").split(/[#\n]/)[0] ?? "";
+  text = text.replace(/[\p{Extended_Pictographic}\p{Emoji_Modifier}‍️✅]/gu, "").replace(/\s+/g, " ").trim();
+  if (!text || REPLY.test(text)) return null;
+  const all = words(text);
+  const plain = all.filter((w) => !w.startsWith("@"));
+  if (plain.length < 3 || plain.length < all.length * 0.6) return null;
+  if (/[áéíóúñ¿¡]/i.test(text)) return null;
+  const es = text.match(SPANISH)?.length ?? 0, en = text.match(ENGLISH)?.length ?? 0;
+  if (es > en || (en === 0 && es > 0)) return null;
+  const letters = text.match(/[A-Za-z]/g)?.length ?? 0;
+  if (letters / Math.max(1, text.replace(/\s/g, "").length) < 0.75) return null;
+  // Just the product or brand name: most words appear in a competitor's product name.
+  const nameWords = new Set(productNames.flatMap((n) => words(String(n))));
+  if (nameWords.size && plain.filter((w) => nameWords.has(w)).length >= plain.length * 0.7) return null;
+  if (text.length > max) { const cut = text.slice(0, max + 1); text = `${cut.slice(0, cut.lastIndexOf(" ")).replace(/[\s,;:&-]+$/, "")}...`; }
+  return text;
+}
+
+const SKIN = /skin|moistur|balm|cream|lotion|serum|tallow|face|beauty|lip|body|care|cosmetic/i;
+/** Generic hook ideas for a category when real hooks are thin. */
+export function genericHooks(category: string | null | undefined, product = "it") {
+  if (SKIN.test(`${category ?? ""} ${product}`)) return [`Before and after: 7 days of ${product} on dry skin`, "Problem, solution: what finally fixed my dry patches", `My night routine, one step: ${product}`];
+  return [`Before and after using ${product}`, `The problem ${product} solves, in 10 seconds`, `How ${product} fits my daily routine`];
+}
+
+/** Up to 3 real hooks from top videos, strongest first. Falls back to generic ideas below 2. */
+export function pickHooks(videos: { video_title?: unknown; displayTitle?: unknown }[], productNames: string[], category?: string | null, product?: string) {
+  const seen = new Set<string>();
+  const good = videos.map((v, i) => ({ i, h: cleanHook(v.video_title ?? v.displayTitle, productNames) })).filter((x): x is { i: number; h: string } => {
+    if (!x.h) return false; const key = x.h.toLowerCase(); if (seen.has(key)) return false; seen.add(key); return true;
+  }).map((x) => ({ ...x, score: (STRONG.test(x.h) ? 0 : 1) * 100 + x.i })).sort((a, b) => a.score - b.score).map((x) => x.h);
+  return good.length >= 2 ? { hooks: good.slice(0, 3), generic: false } : { hooks: genericHooks(category, product), generic: true };
+}
+
+// ---------- price bands ----------
+export interface PriceBand { lo: number; hi: number | null; label: string; units: number; share: number; partner: boolean }
+/** Units-weighted price bands. Step of $5, $10, $20 or $50 picked from the range up to the 95th
+ *  percentile; everything above sits in one "$X+" band. */
+export function priceBands(items: { price: number; units: number }[], partnerPrice?: number) {
+  const valid = items.filter((p) => p.price > 0 && p.units > 0);
+  const total = valid.reduce((n, p) => n + p.units, 0);
+  if (!total) return null;
+  const sorted = [...valid].sort((a, b) => a.price - b.price);
+  let acc = 0; let p95 = sorted[sorted.length - 1]!.price;
+  for (const p of sorted) { acc += p.units; if (acc >= total * 0.95) { p95 = p.price; break; } }
+  const lowest = sorted[0]!.price;
+  const steps = [5, 10, 20, 25, 50, 100];
+  let step = steps.find((s) => Math.ceil(p95 / s) - Math.floor(lowest / s) <= 8) ?? 100;
+  const start = Math.floor(lowest / step) * step;
+  const top = Math.max(start + step, Math.ceil((p95 + 0.001) / step) * step);
+  const bands: PriceBand[] = [];
+  for (let lo = start; lo < top; lo += step) bands.push({ lo, hi: lo + step, label: `$${lo} to $${lo + step}`, units: 0, share: 0, partner: false });
+  const over: PriceBand = { lo: top, hi: null, label: `$${top}+`, units: 0, share: 0, partner: false };
+  for (const p of valid) { const b = p.price >= top ? over : bands[Math.floor((p.price - start) / step)]; if (b) b.units += p.units; }
+  const out = over.units > 0 || (partnerPrice ?? 0) >= top ? [...bands, over] : bands;
+  for (const b of out) { b.share = b.units / total * 100; b.partner = !!partnerPrice && partnerPrice >= b.lo && (b.hi === null || partnerPrice < b.hi); }
+  // Densest window of two neighbouring bands (one band if that already holds most units).
+  let best = { from: 0, to: 0, share: -1 };
+  for (let i = 0; i < bands.length; i++) {
+    const one = bands[i]!.share, two = one + (bands[i + 1]?.share ?? 0);
+    if (one >= 50 && one > best.share) best = { from: i, to: i, share: one };
+    if (i + 1 < bands.length && two > best.share && one < 50) best = { from: i, to: i + 1, share: two };
+  }
+  const zoneLo = bands[best.from]?.lo ?? 0, zoneHi = bands[best.to]?.hi ?? top;
+  const where = !partnerPrice ? null : partnerPrice < zoneLo ? "below" : partnerPrice >= zoneHi ? "above" : "inside";
+  const pctText = `${Math.round(best.share)}%`;
+  const priceText = partnerPrice ? `$${partnerPrice.toFixed(2)}` : "";
+  const headline = `${pctText} of units sell between $${zoneLo} and $${zoneHi}.${where === "inside" ? ` Your ${priceText} sits inside that range.` : where ? ` Your ${priceText} sits ${where} that.` : ""}`;
+  return { bands: out, step, zone: { lo: zoneLo, hi: zoneHi, share: best.share }, where, headline, total };
+}

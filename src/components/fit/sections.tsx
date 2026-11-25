@@ -59,7 +59,7 @@ export function EconomicsCards({ r, products }: { r: R; products: Product[] }) {
 }
 
 export function ExpectedRoi({ r }: { r: R }) {
-  const s = r.scenarios.find((scenario) => scenario.label === "Target");
+  const s = r.scenarios.find((scenario) => scenario.key === "pace");
   if (!s || !r.profitAvailable) return <Note>Add your product cost to see ROI and profit. The GMV plan is still available.</Note>;
   const tone = s.roi >= 0 ? "good" : s.roi > -40 ? "neutral" : "warn";
   return (
@@ -114,7 +114,7 @@ export function FulfillmentSection({ r, products }: { r: R; products?: Product[]
         </div>
       ))}
       <p className="text-xs text-caption">
-        MCF and own 3PL are editable estimates. Monthly volume uses the Target scenario, month 6.
+        MCF and own 3PL are editable estimates. Monthly volume uses the chosen plan, month 6.
       </p>
       <Note>
         <div className="flex gap-3">
