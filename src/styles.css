@@ -164,6 +164,8 @@
 
 @media (min-width: 1024px) {
   .slide { aspect-ratio: 16 / 9; }
+  /* Scrolling deck: at least 16:9, taller when the content needs it. Present mode and PDF keep the fixed size. */
+  .deck .slide { aspect-ratio: auto; min-height: 56.25cqw; }
 }
 
 /* Deck PDF: one 1920 x 1080 page per slide, laid out by the print copy in deck.tsx. */
