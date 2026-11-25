@@ -99,7 +99,8 @@ export function applyClassificationFloor(pool: any[], expansion: SearchExpansion
     if (relevanceOf(p) === "direct" && !namesHead(title)) return { ...p, relevance: title.includes(core) ? "adjacent" : "no", relevanceReason: `Mentions ${core} but is not a ${core} ${head}.` };
     // Ingredient niches must contain the ingredient. Generic skincare is not tallow.
     if (core.split(" ").includes("tallow") && (!title.split(" ").includes("tallow") || /\b(cooking|cook|frying|fry|rendered|lard)\b/.test(title))) return { ...p, relevance: "no", relevanceReason: "Not a tallow skincare product." };
-    if (/\bsewing\b/.test(core) && /\b(machine|gun|buckle|pliers|threaders?|ripper|mannequins?|felt|cardboard|stitcher|fasteners?)\b/.test(title)) return { ...p, relevance: "adjacent", relevanceReason: "Sewing device, craft project or specialist accessory, not a general hand-sewing repair kit." };
+    // Judge the device by what the name leads with. Kit contents listed later (threader, seam ripper) do not make it a device.
+    if (/\bsewing\b/.test(core) && /\b(machines?|handheld|electric|cordless|gun|buckles?|pliers|threaders?|ripper|mannequins?|felt|cardboard|stitcher|fasteners?|chalk|pen|shears|scissors|crochet|knitting|embroidery|cross stitch|needlepoint)\b/.test(title.slice(0, 60))) return { ...p, relevance: "adjacent", relevanceReason: "Sewing device, craft project or specialist accessory, not a general hand-sewing repair kit." };
     const exact = core.split(" ").length > 1 && title.includes(core);
     const ingredientAndForm = core.split(" ").length === 1 && title.includes(core) && modifiers.some((word) => title.split(" ").includes(word));
     if ((exact || ingredientAndForm) && namesHead(title) && !p.offCategory) {
@@ -137,13 +138,13 @@ export function categoryId(p: any, level: 1 | 2 | 3): string {
   return String(id).split(":").pop() ?? "";
 }
 
-/** Level-3 categories where most core products sell: the biggest ones until 80% of matching products, each at least 8%.
+/** Parent (level-2) categories where most core products sell. Sub-categories split one shelf too finely (sewing kits sit in four): the biggest ones until 80% of matching products, each at least 8%.
  * Counted by products, not revenue, so one huge off-shelf listing cannot claim the niche. */
 export function coreCategories(pool: any[], core: string, head?: string) {
   const c = cleanTerm(core), h = head ? cleanTerm(head) : "";
   const ref = pool.filter((p) => { const t = cleanTerm(String(p.product_name)); return t.includes(c) && (!h || t.split(" ").some((w) => w === h || w === `${h}s`)); });
   const byCat = new Map<string, number>();
-  for (const p of ref) { const id = categoryId(p, 3) || categoryId(p, 2); if (id && toNum(p.revenue) >= MIN_POOL_GMV) byCat.set(id, (byCat.get(id) ?? 0) + 1); }
+  for (const p of ref) { const id = categoryId(p, 2) || categoryId(p, 3); if (id && toNum(p.revenue) >= MIN_POOL_GMV) byCat.set(id, (byCat.get(id) ?? 0) + 1); }
   const total = [...byCat.values()].reduce((a, b) => a + b, 0);
   const keep = new Set<string>(); let cum = 0;
   for (const [id, rev] of [...byCat.entries()].sort((a, b) => b[1] - a[1])) {
@@ -159,7 +160,7 @@ export function fallbackClassify(pool: any[], core: string, partnerTitle = "", h
   return pool.map((p) => {
     const t = cleanTerm(String(p.product_name));
     const named = t.includes(cleanTerm(core));
-    const cat = categoryId(p, 3) || categoryId(p, 2);
+    const cat = categoryId(p, 2) || categoryId(p, 3);
     // Without category data we cannot judge the shelf, so the name decides.
     const inCategory = !cats.size || !cat || cats.has(cat);
     if (!named) return { ...p, relevance: "no" as const, relevanceReason: `Does not name ${core}.` };

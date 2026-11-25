@@ -137,18 +137,21 @@ describe("category rule without AI", () => {
   it("keeps the core TikTok category and pushes look-alikes from other categories to adjacent", async () => {
     const { fallbackExpansion, fallbackClassify, applyClassificationFloor } = await import("@/lib/discovery");
     const exp = fallbackExpansion(["sewing kit"], "Travel Sewing Kit with 100 Accessories");
-    const cat = (id: string) => ({ ter_category: { category_id: `1:2:${id}` } });
+    // Real Kalodata shape: kits sit in several sub-categories under one parent shelf.
+    const cat = (id: string) => ({ sec_category: { category_id: `1:${id === "storage" ? "home" : "sewing"}` }, ter_category: { category_id: `1:2:${id}` } });
     const pool = [
       { product_id: "1", product_name: "Seamless Stitching Sewing Kit 100Pcs", revenue: 95000, ...cat("sewkits") },
       { product_id: "2", product_name: "Mini Sewing Kits for Travel", revenue: 30000, ...cat("sewkits") },
       { product_id: "5", product_name: "Sewing Kit for Adults 200 Pcs", revenue: 12000, ...cat("sewkits") },
       { product_id: "6", product_name: "Emergency Sewing Kit Pocket", revenue: 8000, ...cat("sewkits") },
-      { product_id: "7", product_name: "Beginner Sewing Kit with Case", revenue: 6000, ...cat("sewkits") },
+      { product_id: "7", product_name: "Beginner Sewing Kit with Case", revenue: 6000, ...cat("needles") },
+      { product_id: "8", product_name: "36PCS Sewing Repair Kit with Assorted Needles, Threads, Needle Threaders, Thimbles & Seam Ripper", revenue: 1500, ...cat("haberdashery") },
+      { product_id: "9", product_name: "Portable Electric Sewing Machine Set, Mini Handheld Sewing Kit", revenue: 6000, ...cat("machines") },
       { product_id: "3", product_name: "Holiday Crochet Kits Sewing Set", revenue: 5000, ...cat("crochet") },
       { product_id: "4", product_name: "Craft Storage Box for Art Supply Sewing Hair Accessory", revenue: 400000, ...cat("storage") },
     ];
     const out = applyClassificationFloor(fallbackClassify(pool, exp.core, exp.product_type, exp.head), exp);
-    expect(Object.fromEntries(out.map((p) => [p.product_id, p.relevance]))).toEqual({ "1": "direct", "2": "direct", "5": "direct", "6": "direct", "7": "direct", "3": "adjacent", "4": "adjacent" });
+    expect(Object.fromEntries(out.map((p) => [p.product_id, p.relevance]))).toEqual({ "1": "direct", "2": "direct", "5": "direct", "6": "direct", "7": "direct", "8": "direct", "9": "adjacent", "3": "adjacent", "4": "adjacent" });
   });
 });
 
