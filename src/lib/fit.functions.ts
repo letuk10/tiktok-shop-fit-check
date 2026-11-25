@@ -440,7 +440,9 @@ async function amazonPageLookup(asin: string): Promise<AsinProduct | null> {
 export const lookupAsin = createServerFn({ method: "POST" }).inputValidator((d: unknown) => z.object({ asin: z.string().regex(/^[A-Za-z0-9]{10}$/) }).parse(d)).handler(async ({ data }) => {
   const asin = data.asin.toUpperCase(), sb = await db();
   const { data: cached } = await sb.from("asin_cache").select("fetched_at,payload").eq("asin", asin).maybeSingle();
-  if (cached && Date.now() - new Date(cached.fetched_at).getTime() < 30 * 86400000) return { ok: true, product: cached.payload as any as AsinProduct, cached: true };
+  // Only reuse complete lookups made by the current parser (v2); retry partial ones.
+  const usable = cached && (cached.payload as any)?.parserVersion === 2 && Number((cached.payload as any)?.lengthIn) > 0;
+  if (cached && usable && Date.now() - new Date(cached.fetched_at).getTime() < 30 * 86400000) return { ok: true, product: cached.payload as any as AsinProduct, cached: true };
   try {
     let product: AsinProduct | null = null;
     for (const provider of [hubLookup, keepaLookup, amazonPageLookup]) {
@@ -448,7 +450,7 @@ export const lookupAsin = createServerFn({ method: "POST" }).inputValidator((d: 
       if (product && product.title) break;
     }
     if (!product) return { ok: false, product: null, message: "Amazon did not return this listing right now. We filled in what we could; check the product details below." };
-    await sb.from("asin_cache").upsert({ asin, fetched_at: new Date().toISOString(), payload: product as any });
+    await sb.from("asin_cache").upsert({ asin, fetched_at: new Date().toISOString(), payload: { ...product, parserVersion: 2 } as any });
     return { ok: true, product, cached: false };
   } catch (e) {
     console.error("ASIN lookup failed", e);
