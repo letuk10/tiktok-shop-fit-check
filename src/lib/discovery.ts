@@ -99,7 +99,7 @@ export function applyClassificationFloor(pool: any[], expansion: SearchExpansion
     if (/\bsewing\b/.test(core) && /\b(machine|gun|buckle|pliers|threaders?|ripper|mannequins?|felt|cardboard|stitcher|fasteners?)\b/.test(title)) return { ...p, relevance: "adjacent", relevanceReason: "Sewing device, craft project or specialist accessory, not a general hand-sewing repair kit." };
     const exact = core.split(" ").length > 1 && title.includes(core);
     const ingredientAndForm = core.split(" ").length === 1 && title.includes(core) && modifiers.some((word) => title.split(" ").includes(word));
-    if ((exact || ingredientAndForm) && namesHead(title)) {
+    if ((exact || ingredientAndForm) && namesHead(title) && !p.offCategory) {
       const partnerForms = productForms(expansion.product_type), forms = productForms(String(p.product_name));
       if (partnerForms.length && forms.length && !forms.some((f) => partnerForms.includes(f))) return { ...p, relevance: "adjacent" as const, relevanceReason: `Same ingredient, different product (${forms.join(", ")}).` };
       return { ...p, relevance: "direct" as const, reason: "Matches the core product and product form." };
@@ -126,24 +126,46 @@ export function productForms(name: string) {
   return specific.length ? specific : PRODUCT_FORMS['moisturizer']!.test(t) ? ["moisturizer"] : [];
 }
 
-export function fallbackClassify(pool: any[], core: string, partnerTitle = ""): any[] {
-  const matches = pool.filter((p) => cleanTerm(String(p.product_name)).includes(cleanTerm(core)));
-  const categoryRevenue = new Map<string, number>();
-  for (const p of matches) {
-    const cat = String(p.pri_cate_id ?? p.category_id ?? p.category_name ?? "unknown");
-    categoryRevenue.set(cat, (categoryRevenue.get(cat) ?? 0) + toNum(p.revenue));
+/** Kalodata gives categories either flat (ter_cate_id) or as objects (ter_category.category_id). */
+export function categoryId(p: any, level: 1 | 2 | 3): string {
+  const flat = level === 1 ? p.pri_cate_id : level === 2 ? p.sec_cate_id : p.ter_cate_id;
+  const obj = level === 1 ? p.pri_category : level === 2 ? p.sec_category : p.ter_category;
+  const id = flat ?? obj?.category_id ?? "";
+  return String(id).split(":").pop() ?? "";
+}
+
+/** Level-3 categories where most core products sell: the biggest ones until 80% of matching products, each at least 8%.
+ * Counted by products, not revenue, so one huge off-shelf listing cannot claim the niche. */
+export function coreCategories(pool: any[], core: string, head?: string) {
+  const c = cleanTerm(core), h = head ? cleanTerm(head) : "";
+  const ref = pool.filter((p) => { const t = cleanTerm(String(p.product_name)); return t.includes(c) && (!h || t.split(" ").some((w) => w === h || w === `${h}s`)); });
+  const byCat = new Map<string, number>();
+  for (const p of ref) { const id = categoryId(p, 3) || categoryId(p, 2); if (id && toNum(p.revenue) >= MIN_POOL_GMV) byCat.set(id, (byCat.get(id) ?? 0) + 1); }
+  const total = [...byCat.values()].reduce((a, b) => a + b, 0);
+  const keep = new Set<string>(); let cum = 0;
+  for (const [id, rev] of [...byCat.entries()].sort((a, b) => b[1] - a[1])) {
+    if (cum >= 0.8 * total || rev < 0.08 * total) break;
+    keep.add(id); cum += rev;
   }
-  const majority = [...categoryRevenue.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+  return keep;
+}
+
+export function fallbackClassify(pool: any[], core: string, partnerTitle = "", head?: string): any[] {
+  const cats = coreCategories(pool, core, head);
   const partnerForms = productForms(partnerTitle);
   return pool.map((p) => {
-    const cat = String(p.pri_cate_id ?? p.category_id ?? p.category_name ?? "unknown");
-    const sameNiche = cleanTerm(String(p.product_name)).includes(cleanTerm(core)) && cat === majority;
-    if (!sameNiche) return { ...p, relevance: "no" as const, relevanceReason: "Does not match the core product and category." };
+    const t = cleanTerm(String(p.product_name));
+    const named = t.includes(cleanTerm(core));
+    const cat = categoryId(p, 3) || categoryId(p, 2);
+    // Without category data we cannot judge the shelf, so the name decides.
+    const inCategory = !cats.size || !cat || cats.has(cat);
+    if (!named) return { ...p, relevance: "no" as const, relevanceReason: `Does not name ${core}.` };
+    if (!inCategory) return { ...p, relevance: "adjacent" as const, offCategory: true, relevanceReason: `Mentions ${core} but sells in another TikTok Shop category.` };
     const forms = productForms(String(p.product_name));
     if (partnerForms.length && forms.length && !forms.some((f) => partnerForms.includes(f))) {
       return { ...p, relevance: "adjacent" as const, relevanceReason: `Same ingredient, different product (${forms.join(", ")}).` };
     }
-    return { ...p, relevance: "direct" as const, relevanceReason: `Name contains ${core} and matches the main category.` };
+    return { ...p, relevance: "direct" as const, relevanceReason: `Names ${core} and sells in the same TikTok Shop category.` };
   });
 }
 

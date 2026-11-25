@@ -77,7 +77,10 @@ export function parseAmazonPage(html: string): Omit<AsinProduct, "provider"> | n
   if (!title) return null;
   const text = stripTags(html);
   // Price: the first "priceToPay" or core price block, then any offscreen price.
-  const priceBlock = html.match(/(?:priceToPay|corePriceDisplay_desktop_feature_div|corePrice_feature_div)[\s\S]{0,1500}?class="a-offscreen">\s*\$([\d,]+\.\d{2})/i)?.[1]
+  // The buy box price lives in the core price block; other offscreen prices on the page belong to
+  // variants, subscriptions or ads, so search those blocks in order before anything else.
+  const inBlock = (id: string) => { const i = html.indexOf(id); return i < 0 ? undefined : html.slice(i, i + 4000).match(/class="a-offscreen">\s*\$([\d,]+\.\d{2})/i)?.[1]; };
+  const priceBlock = inBlock('id="corePriceDisplay_desktop_feature_div"') ?? inBlock('id="corePrice_feature_div"') ?? inBlock('id="apex_desktop"') ?? inBlock('id="corePrice_desktop"')
     ?? html.match(/class="a-offscreen">\s*\$([\d,]+\.\d{2})/i)?.[1];
   const price = priceBlock ? Number(priceBlock.replace(/,/g, "")) : 0;
   // Dimensions: prefer package dimensions, then product or item dimensions. Formats like

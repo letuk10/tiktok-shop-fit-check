@@ -145,7 +145,7 @@ async function classifyPool(pool: any[], expansion: { product_type: string; not_
     return { ai: true, pool: applyClassificationFloor(pool.map((p) => ({ ...p, relevance: byId.get(String(p.product_id))?.relevance ?? "no", relevanceReason: byId.get(String(p.product_id))?.reason ?? (Number(p.revenue ?? 0) < 500 ? "Under $500 in 30-day GMV." : "Outside the reviewed top 80.") })), expansion) };
   } catch (e) {
     console.error("AI relevance classification failed; using deterministic fallback", e);
-    return { ai: false, pool: applyClassificationFloor(fallbackClassify(pool, expansion.core, expansion.product_type), expansion) };
+    return { ai: false, pool: applyClassificationFloor(fallbackClassify(pool, expansion.core, expansion.product_type, (expansion as { head?: string }).head), expansion) };
   }
 }
 
@@ -415,20 +415,27 @@ async function keepaLookup(asin: string): Promise<AsinProduct | null> {
 }
 async function amazonPageLookup(asin: string): Promise<AsinProduct | null> {
   const { parseAmazonPage, isAmazonBlockPage } = await import("./asin");
-  const res = await fetch(`https://www.amazon.com/dp/${asin}?th=1&psc=1`, {
-    headers: {
-      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": "en-US,en;q=0.9",
-    },
-    redirect: "follow",
-    signal: AbortSignal.timeout(15000),
-  });
-  const html = await res.text();
-  if (!res.ok || isAmazonBlockPage(html)) { console.warn(`Amazon page lookup for ${asin} blocked or failed (${res.status})`); return null; }
-  const parsed = parseAmazonPage(html);
-  if (!parsed) { console.warn(`Amazon page for ${asin} could not be parsed`); return null; }
-  return { ...parsed, provider: "amazon" };
+  // Amazon throttles server traffic. Try the desktop page, then the mobile page, each with a
+  // matching browser profile, and stop at the first one that returns a real product page.
+  const attempts = [
+    { url: `https://www.amazon.com/dp/${asin}?th=1&psc=1`, ua: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36" },
+    { url: `https://www.amazon.com/gp/aw/d/${asin}?th=1&psc=1`, ua: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Mobile/15E148 Safari/604.1" },
+    { url: `https://www.amazon.com/dp/${asin}`, ua: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0" },
+  ];
+  for (const [i, a] of attempts.entries()) {
+    if (i) await sleep(700);
+    try {
+      const res = await fetch(a.url, {
+        headers: { "User-Agent": a.ua, "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", "Accept-Language": "en-US,en;q=0.9", "Cache-Control": "no-cache" },
+        redirect: "follow", signal: AbortSignal.timeout(12000),
+      });
+      const html = await res.text();
+      if (!res.ok || isAmazonBlockPage(html)) { console.warn(`Amazon page attempt ${i + 1} for ${asin} blocked (${res.status})`); continue; }
+      const parsed = parseAmazonPage(html);
+      if (parsed) return { ...parsed, provider: "amazon" };
+    } catch (e) { console.warn(`Amazon page attempt ${i + 1} for ${asin} failed`, e); }
+  }
+  return null;
 }
 
 export const lookupAsin = createServerFn({ method: "POST" }).inputValidator((d: unknown) => z.object({ asin: z.string().regex(/^[A-Za-z0-9]{10}$/) }).parse(d)).handler(async ({ data }) => {

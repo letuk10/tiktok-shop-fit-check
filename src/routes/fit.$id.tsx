@@ -417,6 +417,7 @@ function ProductCard({ p, i, set, remove, canRemove, askPrice }: { p: Product; i
       <Field label="COGS per unit" help="Landed cost of one unit."><NumInput prefix="$" value={p.cogs || undefined} onChange={cogs => set({cogs})} /></Field>
     </div>
     {p.asin && sProviderNote(p) && <p className="text-xs text-caption">Package: {p.length.toFixed(1)} x {p.width.toFixed(1)} x {p.height.toFixed(1)} in, {p.weight.toFixed(2)} lb, from Amazon. Edit the values below if needed. FBT measures the unit at inbound, so the final fee can differ slightly.</p>}
+    {!(p.length > 0 && p.weight > 0) && <p className="text-xs text-caption">Package size and weight drive the FBT fee and sample cost. On the Amazon listing they are under Product information, as "Package Dimensions" (for example 3.4 x 2.7 x 2.7 inches; 8.5 ounces, which is 0.53 lb). Seller Central shows them under the listing's shipping details.</p>}
     <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
       <Field label="Weight"><NumInput value={p.weight || undefined} onChange={weight => set({weight})} suffix="lb" /></Field>
       <Field label="Length"><NumInput value={p.length || undefined} onChange={length => set({length})} suffix="in" /></Field>
