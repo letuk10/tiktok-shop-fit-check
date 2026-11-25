@@ -37,3 +37,13 @@ describe("Amazon page lookup", () => {
     expect(titleFromAmazonUrl("https://www.amazon.com/dp/B0C3KW5VJR")).toBe("");
   });
 });
+
+describe("Amazon price", () => {
+  it("prefers the buy box price over unit prices and coupons", () => {
+    const html = `<span id="productTitle">Tallow Balm</span><span class="a-offscreen">$6.00</span>
+      <div id="corePriceDisplay_desktop_feature_div"><span class="a-price priceToPay"><span class="a-price-whole">39<span class="a-price-decimal">.</span></span><span class="a-price-fraction">99</span></span>
+      <span class="a-offscreen">$10.00</span> / Fl Oz</div>`;
+    expect(parseAmazonPage(html)!.price).toBe(39.99);
+    expect(parseAmazonPage(`<span id="productTitle">X</span><script>{"priceAmount":39.99}</script><span class="a-offscreen">$6.00</span>`)!.price).toBe(39.99);
+  });
+});

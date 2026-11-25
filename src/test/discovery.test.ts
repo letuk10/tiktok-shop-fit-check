@@ -151,3 +151,14 @@ describe("category rule without AI", () => {
     expect(Object.fromEntries(out.map((p) => [p.product_id, p.relevance]))).toEqual({ "1": "direct", "2": "direct", "5": "direct", "6": "direct", "7": "direct", "3": "adjacent", "4": "adjacent" });
   });
 });
+
+describe("search terms from an Amazon title", () => {
+  it("does not pick an adjective as the product or keep stray hyphens", async () => {
+    const { fallbackExpansion, searchTermSet } = await import("@/lib/discovery");
+    const title = "Amallow 100% Grass Fed Beef Tallow for Skin Care - Face + Body - Whipped Moisturizer - Natural Lotion, 4 FL. oz. (Unscented)";
+    const exp = fallbackExpansion(["beef tallow whipped"], title);
+    expect(exp.core).toBe("tallow");
+    const terms = searchTermSet(["beef tallow whipped"], exp, title);
+    expect(terms.some((t) => t.startsWith("-") || t === "whipped")).toBe(false);
+  });
+});

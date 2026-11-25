@@ -79,10 +79,16 @@ export function parseAmazonPage(html: string): Omit<AsinProduct, "provider"> | n
   // Price: the first "priceToPay" or core price block, then any offscreen price.
   // The buy box price lives in the core price block; other offscreen prices on the page belong to
   // variants, subscriptions or ads, so search those blocks in order before anything else.
+  // Most reliable: the buy box amount Amazon embeds as JSON, then the visible "price to pay"
+  // split into whole and fraction. Plain offscreen prices can be unit prices ($/oz) or coupons.
+  const embedded = html.match(/"priceAmount"\s*:\s*([\d.]+)/)?.[1] ?? html.match(/"buyingPrice"\s*:\s*"?\$?([\d.]+)/)?.[1];
+  const ptpIdx = html.search(/priceToPay|apex-pricetopay/);
+  const ptp = ptpIdx < 0 ? undefined : html.slice(ptpIdx, ptpIdx + 2500).match(/a-price-whole">\s*([\d,]+)[\s\S]{0,120}?a-price-fraction">\s*(\d{2})/);
   const inBlock = (id: string) => { const i = html.indexOf(id); return i < 0 ? undefined : html.slice(i, i + 4000).match(/class="a-offscreen">\s*\$([\d,]+\.\d{2})/i)?.[1]; };
   const priceBlock = inBlock('id="corePriceDisplay_desktop_feature_div"') ?? inBlock('id="corePrice_feature_div"') ?? inBlock('id="apex_desktop"') ?? inBlock('id="corePrice_desktop"')
     ?? html.match(/class="a-offscreen">\s*\$([\d,]+\.\d{2})/i)?.[1];
-  const price = priceBlock ? Number(priceBlock.replace(/,/g, "")) : 0;
+  const candidates = [embedded, ptp ? `${ptp[1]}.${ptp[2]}` : undefined, priceBlock].map((v) => v ? Number(String(v).replace(/,/g, "")) : 0);
+  const price = candidates.find((n) => n > 0 && n < 10000) ?? 0;
   // Dimensions: prefer package dimensions, then product or item dimensions. Formats like
   // "3.43 x 2.72 x 2.68 inches; 8.48 Ounces" or "3.4"L x 2.7"W x 2.7"H".
   const dimLabel = /(Package Dimensions|Product Dimensions|Item Dimensions(?: LxWxH)?)\s*:?\s*([\d.]+)\s*"?\s*[LlWwHh]?\s*x\s*([\d.]+)\s*"?\s*[LlWwHh]?\s*x\s*([\d.]+)\s*"?\s*[LlWwHh]?\s*(inches|inch|in|centimeters|cm)?\s*(?:;\s*([\d.]+)\s*(pounds|pound|lbs|lb|ounces|ounce|oz|kilograms|kg|grams|g)\b)?/gi;

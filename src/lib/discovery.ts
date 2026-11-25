@@ -8,7 +8,7 @@ export const MIN_POOL_GMV = 500;
 export const MIN_COMPETITOR_GMV = 5000;
 export const MAX_SEARCH_TERMS = 8;
 
-const cleanTerm = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s-]/g, " ").replace(/\s+/g, " ").trim();
+const cleanTerm = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s-]/g, " ").replace(/(^|\s)-+|-+(\s|$)/g, " ").replace(/\s+/g, " ").trim();
 export function fallbackExpansion(keywords: string[], title = ""): SearchExpansion {
   const words = cleanTerm([title, ...keywords].join(" ")).split(" ").filter((w) => w && !STOP_WORDS.has(w));
   const kwWords = cleanTerm(keywords.join(" ")).split(" ").filter((w) => w && !STOP_WORDS.has(w));
@@ -31,7 +31,7 @@ export function fallbackExpansion(keywords: string[], title = ""): SearchExpansi
 }
 
 // Words that describe use or audience, not the product. Searching them alone floods the pool.
-export const GENERIC_WORDS = new Set(["face", "body", "skin", "hair", "men", "women", "kids", "baby", "dry", "care", "pack", "gift", "new", "daily", "premium", "large", "small", "travel", "size", "oz", "count", "pure", "grass", "fed"]);
+export const GENERIC_WORDS = new Set(["whipped", "unscented", "scented", "raw", "handmade", "hydrating", "moisturizing", "nourishing", "gentle", "sensitive", "lightweight", "luxury", "original", "classic", "face", "body", "skin", "hair", "men", "women", "kids", "baby", "dry", "care", "pack", "gift", "new", "daily", "premium", "large", "small", "travel", "size", "oz", "count", "pure", "grass", "fed"]);
 
 export function searchTermSet(keywords: string[], expansion: SearchExpansion, title = "") {
   const deterministic = keywords.flatMap((keyword) => {
