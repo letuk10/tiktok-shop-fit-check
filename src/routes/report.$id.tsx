@@ -7,7 +7,9 @@ import { DeckView } from "@/components/fit/deck";
 import { BookCall } from "@/components/fit/book-call";
 import { ScanProgress } from "@/components/fit/scan-progress";
 import { TeamAdjustments } from "@/components/fit/team-adjustments";
-import { EyeOff, Lock, Pencil, Presentation, Printer } from "lucide-react";
+import { Download, EyeOff, Loader2, Lock, Pencil, Presentation, Printer } from "lucide-react";
+import { toast } from "sonner";
+import { downloadDeckPdf } from "@/lib/deck-pdf";
 import { selectedCompetitors, productKey, computeAll, NEXT_STEP, type MarketData } from "@/lib/calc";
 import { enrichCategory, getSubmission, getTeamVerdict, runMarketScan } from "@/lib/fit.functions";
 import { Eyebrow, GhostBtn, PrimaryBtn, TextInput, VerdictBadge } from "@/components/fit/ui";
@@ -78,7 +80,8 @@ function Report() {
           <Link to="/fit/$id" params={{ id }}><GhostBtn><Pencil className="h-4 w-4" /> Edit answers</GhostBtn></Link>
           {!marketOnly && k?.ok && !pending && <GhostBtn onClick={() => setPresenting(true)}><Presentation className="h-4 w-4" /> Present</GhostBtn>}
           {teamPass && !marketOnly && <GhostBtn aria-pressed={hidePricing} onClick={() => setHidePricing((h) => !h)}><EyeOff className="h-4 w-4" /> {hidePricing ? "Show pricing" : "Hide pricing"}</GhostBtn>}
-          <GhostBtn onClick={() => window.print()}><Printer className="h-4 w-4" /> Print / Save as PDF</GhostBtn>
+          {!marketOnly && k?.ok && !pending ? <PdfButton name={`${row.brand_name || "Brand"} TikTok Shop Plan, Sophie Society.pdf`} />
+            : <GhostBtn onClick={() => window.print()}><Printer className="h-4 w-4" /> Print / Save as PDF</GhostBtn>}
         </div>
       </div>
 
@@ -161,4 +164,15 @@ function TeamToggle({ id, onUnlock }: { id: string; onUnlock: (pass: string)=>vo
       <div className="text-sm"><span className="font-semibold text-navy">Next step:</span> {NEXT_STEP[v]}</div>
     </div>
   );
+}
+
+function PdfButton({ name }: { name: string }) {
+  const [progress, setProgress] = useState<string | null>(null);
+  async function run() {
+    setProgress("Preparing...");
+    try { await downloadDeckPdf(name, (d, t) => setProgress(`Slide ${d} of ${t}`)); }
+    catch { toast.error("Could not build the PDF. Try again, or use your browser's print in landscape."); }
+    finally { setProgress(null); }
+  }
+  return <GhostBtn onClick={run} disabled={!!progress}>{progress ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />} {progress ?? "Download PDF"}</GhostBtn>;
 }

@@ -27,6 +27,13 @@ export function MarketEntry() {
   const asin = parseAsins(amazonInput)[0] ?? '';
   // With a found listing the product name is the Amazon title; otherwise what the user typed.
   const productName = lookup?.title || product || amazonInput;
+  const [tried, setTried] = useState(false);
+  const missing = [
+    !brand.trim() && 'Brand name',
+    !productName.trim() && (manual ? 'Product name' : 'Amazon link or ASIN (then Get Amazon details), or enter it manually'),
+    !keywords.some((k) => k.trim()) && 'At least one TikTok search keyword',
+    !(Number(price) > 0) && 'Your price',
+  ].filter(Boolean) as string[];
   const valid = marketEntrySchema.safeParse({ brand, product: productName, asin, keywords, price: price ? Number(price) : undefined, lookup: lookup ?? undefined }).success;
 
   async function findAmazon() {
@@ -54,7 +61,8 @@ export function MarketEntry() {
   }
 
   async function submit(e: React.FormEvent) {
-    e.preventDefault(); if (!valid || busy) return;
+    e.preventDefault(); if (busy) return;
+    if (!valid) { setTried(true); return; }
     setBusy(true); setError('');
     try {
       const { id } = await create({ data: { brand, product: productName, asin, keywords, price: Number(price), lookup: lookup ?? undefined } });
@@ -91,7 +99,11 @@ export function MarketEntry() {
         <Field label="Your price ($)"><TextInput aria-label="Your price" required type="number" min="0.01" step="any" inputMode="decimal" value={price} onChange={e => setPrice(e.target.value)} /></Field>
       </div>}
       {error && <Note>{error}</Note>}
-      <PrimaryBtn type="submit" disabled={!valid || busy} className="h-14 w-full text-base">{busy ? <Loader2 className="h-5 w-5 animate-spin" /> : null} Analyze my market <ArrowRight className="h-5 w-5" /></PrimaryBtn>
+      {tried && !valid && <div role="alert" className="rounded-xl border border-orange/50 bg-orange/10 p-4 text-sm">
+        <div className="font-semibold text-navy">To analyze your market, complete:</div>
+        <ul className="mt-2 list-disc space-y-1 pl-5">{(missing.length ? missing : ['Check the fields above']).map((m) => <li key={m}>{m}</li>)}</ul>
+      </div>}
+      <PrimaryBtn type="submit" disabled={busy} aria-disabled={!valid} className="h-14 w-full text-base">{busy ? <Loader2 className="h-5 w-5 animate-spin" /> : null} Analyze my market <ArrowRight className="h-5 w-5" /></PrimaryBtn>
     </form>
   </div>;
 }

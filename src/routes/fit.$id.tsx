@@ -16,7 +16,7 @@ import { EconomicsCards, FulfillmentSection, MarketSection } from "@/components/
 import { Story, scenarioOf } from "@/components/fit/story";
 import { ScanProgress } from "@/components/fit/scan-progress";
 import { InterestPrompt } from "@/components/fit/interest-prompt";
-import { qualificationReady } from "@/lib/qualification";
+import { missingFields, qualificationReady } from "@/lib/qualification";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/fit/$id")({
@@ -88,6 +88,9 @@ function Wizard() {
 
   useEffect(()=>{if(s.answers.shopId)void save({data:{id,patch:{answers:s.answers as any}}});},[s.answers.shopId]);
   const canNext = qualificationReady(step,s) && !(step===2 && ownBusy);
+  const missing = missingFields(step, s);
+  const [tried, setTried] = useState(false);
+  useEffect(() => setTried(false), [step]);
 
   async function persist(nextStep: number, extra: Partial<Answers> = {}) {
     setSaving(true);
@@ -113,7 +116,8 @@ function Wizard() {
   }
 
   async function next() {
-    if (!canNext || !(await persist(step + 1))) return;
+    if (!canNext) { setTried(true); return; }
+    if (!(await persist(step + 1))) return;
     if (step === 5) return nav({ to: "/report/$id", params: { id } });
     setStep(step + 1);
     window.scrollTo({ top: 0 });
@@ -163,9 +167,19 @@ function Wizard() {
         </StepWrap>}
       </div>
       {step === 0 && !s.answers.interest && !declining && s.answers.competitorsConfirmed && r.insights.hasData && !selectedCompetitors(k, s.answers).some((p) => !k?.enriched?.[productKey(p)]?.attempted) && <StickyPlanCta brand={s.brand_name} gmv={scenarioOf(r)?.rows[PLAN_MONTHS - 1]?.gmv ?? 0} disabled={saving} onYes={() => interest("yes")} onNo={() => { void interest("no"); setTimeout(() => document.getElementById("interest-gate")?.scrollIntoView({ behavior: "smooth", block: "center" }), 50); }} />}
-      {step > 0 && <div className="sticky bottom-0 mt-10 flex items-center justify-between gap-3 border-t border-border bg-background/95 py-4 backdrop-blur">
-        <GhostBtn onClick={async () => {if (await persist(step - 1)) setStep(step - 1);}} disabled={saving}><ArrowLeft className="h-4 w-4" /> Back</GhostBtn>
-        <PrimaryBtn onClick={next} disabled={!canNext || saving}>{saving ? "Saving..." : step === 5 ? "See your full plan" : "Continue"} <ArrowRight className="h-4 w-4" /></PrimaryBtn>
+      {step > 0 && <div className="sticky bottom-0 mt-10 space-y-3 border-t border-border bg-background/95 py-4 backdrop-blur">
+        {tried && missing.length > 0 && <div role="alert" className="rounded-xl border border-orange/50 bg-orange/10 p-4 text-sm">
+          <div className="font-semibold text-navy">To continue, complete {missing.length === 1 ? "this" : `these ${missing.length}`}:</div>
+          <ul className="mt-2 list-disc space-y-1 pl-5">{missing.map((m) => <li key={m}>{m}</li>)}</ul>
+        </div>}
+        <div className="flex items-center justify-between gap-3">
+          <GhostBtn onClick={async () => {if (await persist(step - 1)) setStep(step - 1);}} disabled={saving}><ArrowLeft className="h-4 w-4" /> Back</GhostBtn>
+          <div className="flex items-center gap-3">
+            {!tried && missing.length > 0 && <span className="hidden text-sm text-caption sm:inline">{missing.length} {missing.length === 1 ? "item" : "items"} left</span>}
+            {step === 2 && ownBusy && <span className="text-sm text-caption">Loading your shop...</span>}
+            <PrimaryBtn onClick={next} disabled={saving || (step === 2 && ownBusy)} aria-disabled={!canNext}>{saving ? "Saving..." : step === 5 ? "See your full plan" : "Continue"} <ArrowRight className="h-4 w-4" /></PrimaryBtn>
+          </div>
+        </div>
       </div>}
     </div>
   );

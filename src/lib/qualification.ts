@@ -23,3 +23,49 @@ export function qualificationReady(step:number, value:unknown):boolean {
 }
 export const validVideoId=(id:string)=>/^\d{10,30}$/.test(id);
 export const hasZeroCommission=(values:(number|null)[])=>values.some(v=>v===0);
+/** Plain-language list of what still blocks Continue on a step. Mirrors qualificationReady. */
+export function missingFields(step:number, value:any):string[] {
+ const s=value??{}, a=s.answers??{}, out:string[]=[];
+ const has=(v:unknown)=>text.safeParse(v).success, num=(v:unknown)=>nonnegative.safeParse(v).success, pos=(v:unknown)=>positive.safeParse(v).success;
+ if(step===1){
+  if(!['client','pod_leader','sales_exec'].includes(s.role))out.push('Your role');
+  if(!has(s.submitter_name))out.push('Your name');
+  if(!email.safeParse(s.submitter_email).success)out.push(has(s.submitter_email)?'Your email (check the format)':'Your email');
+  if(s.role&&s.role!=='client'){if(!has(s.client_name))out.push('Partner contact name');if(!email.safeParse(s.client_email).success)out.push(has(s.client_email)?'Partner contact email (check the format)':'Partner contact email');}
+ }
+ if(step===2){
+  if(s.branch!=='launch'&&s.branch!=='optimize')out.push('Whether the brand already sells on TikTok Shop');
+  if(s.branch==='launch'){
+   if(!['yes','no','progress'].includes(a.usSeller))out.push('US TikTok Shop seller account');
+   if(!(has(a.dtc)||(Array.isArray(a.dtc)&&a.dtc.length)))out.push('Where you sell today');
+   if(typeof a.commitSamples!=='boolean')out.push('Commitment to 150+ samples a month');
+   if(typeof a.commitAds!=='boolean')out.push('Commitment to about $100/day in ads');
+  }
+  if(s.branch==='optimize'){
+   if(!has(a.shopName)||!has(a.shopId))out.push('TikTok Shop name (search it and pick your shop)');
+   if(!['inhouse','agency','nobody'].includes(a.runsIt))out.push('Who runs it today');
+   if(!num(a.samplesNow))out.push('Samples sent per month');
+   if(typeof a.gmvMax!=='boolean')out.push('Running GMV Max ads');
+   else if(a.gmvMax&&!pos(a.gmvMaxDaily))out.push('GMV Max daily spend');
+   if(!['yes','no','unsure'].includes(a.probation))out.push('Weekly creator outreach limit');
+   if(!['fbt','own','mcf'].includes(a.fulfillment))out.push('How you fulfill today');
+   if(!has(a.challenge))out.push('Biggest challenge');
+  }
+ }
+ if(step===3){
+  if(!has(a.amazonRevenue))out.push('Monthly Amazon revenue');
+  if(!has(a.dtcRevenue))out.push('Monthly DTC revenue');
+  if(!z.number().int().positive().safeParse(a.catalogSize).success)out.push('Number of products in catalog');
+  (Array.isArray(s.products)?s.products:[]).forEach((p:any,i:number)=>{
+   const name=p?.name?.trim()?p.name.trim().split(/\s+/).slice(0,4).join(' '):`Product ${i+1}`, miss:string[]=[];
+   if(!has(p?.name))miss.push('name');
+   if(!pos(p?.price))miss.push('selling price');
+   if(!num(p?.cogs))miss.push('COGS per unit');
+   if(!pos(p?.weight))miss.push('weight');
+   if(!pos(p?.length)||!pos(p?.width)||!pos(p?.height))miss.push('package size (length, width, height)');
+   if(miss.length)out.push(`${name}: ${miss.join(', ')}`);
+  });
+ }
+ if(step===4&&!num(s.assumptions?.ownCost))out.push('Own / 3PL cost per order');
+ return out;
+}
