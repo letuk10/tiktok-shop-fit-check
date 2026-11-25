@@ -11,11 +11,23 @@ export const MAX_SEARCH_TERMS = 8;
 const cleanTerm = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s-]/g, " ").replace(/\s+/g, " ").trim();
 export function fallbackExpansion(keywords: string[], title = ""): SearchExpansion {
   const words = cleanTerm([title, ...keywords].join(" ")).split(" ").filter((w) => w && !STOP_WORDS.has(w));
-  const grams: string[] = [];
-  for (const size of [1, 2]) for (let i = 0; i <= words.length - size; i++) grams.push(words.slice(i, i + size).join(" "));
-  const core = words.length > 1 ? (words[1] ?? "product") : words[0] ?? "product";
-  return { core, variants: [...new Set(grams)].slice(0, 6), product_type: cleanTerm(title) || keywords.join(", "), not_competitors: [] };
+  const kwWords = cleanTerm(keywords.join(" ")).split(" ").filter((w) => w && !STOP_WORDS.has(w));
+  // Core: the most repeated meaningful word across title and keywords (e.g. "tallow"), else the keyword head.
+  const counts = new Map<string, number>();
+  for (const w of words) if (w.length > 3 && !GENERIC_WORDS.has(w)) counts.set(w, (counts.get(w) ?? 0) + 1);
+  // Ties go to the head noun: in "beef tallow", "tallow" names the product, "beef" describes it.
+  const headRank = (w: string) => kwWords.lastIndexOf(w);
+  const core = [...counts.entries()].sort((a, b) => b[1] - a[1] || headRank(b[0]) - headRank(a[0]))[0]?.[0] ?? kwWords[0] ?? "product";
+  const bigrams: string[] = [];
+  for (let i = 0; i < words.length - 1; i++) {
+    const g = `${words[i]} ${words[i + 1]}`;
+    if (g.includes(core) && !GENERIC_WORDS.has(words[i] ?? "") || g.includes(core) && !GENERIC_WORDS.has(words[i + 1] ?? "")) bigrams.push(g);
+  }
+  return { core, variants: [...new Set(bigrams)].slice(0, 6), product_type: cleanTerm(title) || keywords.join(", "), not_competitors: [] };
 }
+
+// Words that describe use or audience, not the product. Searching them alone floods the pool.
+export const GENERIC_WORDS = new Set(["face", "body", "skin", "hair", "men", "women", "kids", "baby", "dry", "care", "pack", "set", "kit", "gift", "new", "daily", "premium", "large", "small", "travel", "size", "oz", "count", "pure", "grass", "fed"]);
 
 export function searchTermSet(keywords: string[], expansion: SearchExpansion, title = "") {
   const deterministic = keywords.flatMap((keyword) => {
@@ -23,20 +35,32 @@ export function searchTermSet(keywords: string[], expansion: SearchExpansion, ti
     const core = raw.filter((w) => !STOP_WORDS.has(w));
     const out = [cleanTerm(keyword)];
     for (let n = core.length; n >= 1; n--) out.push(core.slice(0, n).join(" "));
-    for (const size of [1, 2]) for (let i = 0; i <= core.length - size; i++) out.push(core.slice(i, i + size).join(" "));
+    for (let i = 0; i <= core.length - 2; i++) out.push(core.slice(i, i + 2).join(" "));
     return out;
   });
   const titleWords = cleanTerm(title).split(" ").filter((w) => w && !STOP_WORDS.has(w));
-  return [...new Set([...keywords.map(cleanTerm), expansion.core, ...expansion.variants.map(cleanTerm), ...deterministic, titleWords.slice(0, 2).join(" ")])].filter(Boolean).slice(0, MAX_SEARCH_TERMS);
+  const coreTerm = cleanTerm(expansion.core);
+  const useful = (t: string) => {
+    const parts = t.split(" ").filter(Boolean);
+    if (!parts.length) return false;
+    if (parts.length === 1) return t === coreTerm; // the only one-word search is the core term
+    return !parts.every((w) => GENERIC_WORDS.has(w) || STOP_WORDS.has(w));
+  };
+  return [...new Set([...keywords.map(cleanTerm), coreTerm, ...expansion.variants.map(cleanTerm), ...deterministic, titleWords.slice(0, 2).join(" ")])].filter(useful).slice(0, MAX_SEARCH_TERMS);
 }
 
 export function mergePoolProducts(existing: any[], incoming: any[], term?: string) {
   const pool = new Map<string, any>();
-  for (const p of [...existing, ...incoming]) {
+  for (const p of existing) {
+    const id = String(p.product_id ?? "");
+    if (id) pool.set(id, { ...p, product_id: id, foundTerms: [...(p.foundTerms ?? [])] });
+  }
+  for (const p of incoming) {
     const id = String(p.product_id ?? "");
     if (!id) continue;
     const prior = pool.get(id);
-    const terms = [...new Set([...(prior?.foundTerms ?? p.foundTerms ?? []), ...(p.foundTerms ?? []), ...(term ? [term] : [])])];
+    // Only the products this search returned get credit for the term.
+    const terms = [...new Set([...(prior?.foundTerms ?? []), ...(p.foundTerms ?? []), ...(term ? [term] : [])])];
     // One first-observed last-30-day snapshot per listing, never a maximum across periods.
     const best = prior ? { ...p, ...prior } : p;
     pool.set(id, { ...best, product_id: id, foundTerms: terms });
@@ -68,12 +92,34 @@ export function applyClassificationFloor(pool: any[], expansion: SearchExpansion
     if (/\bsewing\b/.test(core) && /\b(machine|gun|buckle|pliers|threaders?|ripper|mannequins?|felt|cardboard|stitcher|fasteners?)\b/.test(title)) return { ...p, relevance: "adjacent", relevanceReason: "Sewing device, craft project or specialist accessory, not a general hand-sewing repair kit." };
     const exact = core.split(" ").length > 1 && title.includes(core);
     const ingredientAndForm = core.split(" ").length === 1 && title.includes(core) && modifiers.some((word) => title.split(" ").includes(word));
-    if (exact || ingredientAndForm) return { ...p, relevance: "direct" as const, reason: "Matches the core product and product form." };
+    if (exact || ingredientAndForm) {
+      const partnerForms = productForms(expansion.product_type), forms = productForms(String(p.product_name));
+      if (partnerForms.length && forms.length && !forms.some((f) => partnerForms.includes(f))) return { ...p, relevance: "adjacent" as const, relevanceReason: `Same ingredient, different product (${forms.join(", ")}).` };
+      return { ...p, relevance: "direct" as const, reason: "Matches the core product and product form." };
+    }
     return p;
   });
 }
 
-export function fallbackClassify(pool: any[], core: string): any[] {
+// Product forms. A product in a different form from the partner's is adjacent, not a direct substitute.
+export const PRODUCT_FORMS: Record<string, RegExp> = {
+  lip: /\blip(s)?\b|\blip balm\b|chapstick/,
+  soap: /\bsoap\b|\bcleanser\b|\bface wash\b|\bbody wash\b/,
+  deodorant: /\bdeodorant\b|\bantiperspirant\b/,
+  candle: /\bcandles?\b/,
+  hair: /\bshampoo\b|\bconditioner\b|\bhair (mask|oil)\b/,
+  serum: /\bserum\b/,
+  supplement: /\bcapsules?\b|\bsupplement\b|\bgummies\b|\bpowder\b/,
+  moisturizer: /\bbalm\b|\bcream\b|\bmoisturi[sz]er\b|\bbutter\b|\blotion\b|\bsalve\b/,
+};
+export function productForms(name: string) {
+  const t = cleanTerm(name);
+  // Specific forms win: a "tallow lip balm" is a lip product, not a face moisturizer.
+  const specific = Object.entries(PRODUCT_FORMS).filter(([k, re]) => k !== "moisturizer" && re.test(t)).map(([k]) => k);
+  return specific.length ? specific : PRODUCT_FORMS['moisturizer']!.test(t) ? ["moisturizer"] : [];
+}
+
+export function fallbackClassify(pool: any[], core: string, partnerTitle = ""): any[] {
   const matches = pool.filter((p) => cleanTerm(String(p.product_name)).includes(cleanTerm(core)));
   const categoryRevenue = new Map<string, number>();
   for (const p of matches) {
@@ -81,10 +127,16 @@ export function fallbackClassify(pool: any[], core: string): any[] {
     categoryRevenue.set(cat, (categoryRevenue.get(cat) ?? 0) + toNum(p.revenue));
   }
   const majority = [...categoryRevenue.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+  const partnerForms = productForms(partnerTitle);
   return pool.map((p) => {
     const cat = String(p.pri_cate_id ?? p.category_id ?? p.category_name ?? "unknown");
-    const direct = cleanTerm(String(p.product_name)).includes(cleanTerm(core)) && cat === majority;
-    return { ...p, relevance: direct ? "direct" as const : "no" as const, relevanceReason: direct ? `Name contains ${core} and matches the main category.` : "Does not match the core product and category." };
+    const sameNiche = cleanTerm(String(p.product_name)).includes(cleanTerm(core)) && cat === majority;
+    if (!sameNiche) return { ...p, relevance: "no" as const, relevanceReason: "Does not match the core product and category." };
+    const forms = productForms(String(p.product_name));
+    if (partnerForms.length && forms.length && !forms.some((f) => partnerForms.includes(f))) {
+      return { ...p, relevance: "adjacent" as const, relevanceReason: `Same ingredient, different product (${forms.join(", ")}).` };
+    }
+    return { ...p, relevance: "direct" as const, relevanceReason: `Name contains ${core} and matches the main category.` };
   });
 }
 

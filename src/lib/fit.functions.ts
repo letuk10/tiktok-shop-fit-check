@@ -145,7 +145,7 @@ async function classifyPool(pool: any[], expansion: { product_type: string; not_
     return { ai: true, pool: applyClassificationFloor(pool.map((p) => ({ ...p, relevance: byId.get(String(p.product_id))?.relevance ?? "no", relevanceReason: byId.get(String(p.product_id))?.reason ?? (Number(p.revenue ?? 0) < 500 ? "Under $500 in 30-day GMV." : "Outside the reviewed top 80.") })), expansion) };
   } catch (e) {
     console.error("AI relevance classification failed; using deterministic fallback", e);
-    return { ai: false, pool: applyClassificationFloor(fallbackClassify(pool, expansion.core), expansion) };
+    return { ai: false, pool: applyClassificationFloor(fallbackClassify(pool, expansion.core, expansion.product_type), expansion) };
   }
 }
 

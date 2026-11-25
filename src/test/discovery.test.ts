@@ -85,3 +85,34 @@ describe("competitor discovery V2", () => {
     expect(result.hitRate).toBe(5);
   });
 });
+
+describe("discovery quality fixes", () => {
+  it("credits a search term only to the products that search returned", async () => {
+    const { mergePoolProducts } = await import("@/lib/discovery");
+    let pool = mergePoolProducts([], [{ product_id: "a", revenue: 10 }], "tallow");
+    pool = mergePoolProducts(pool, [{ product_id: "b", revenue: 5 }], "seller expansion");
+    expect(pool.find((p) => p.product_id === "a")?.foundTerms).toEqual(["tallow"]);
+    expect(pool.find((p) => p.product_id === "b")?.foundTerms).toEqual(["seller expansion"]);
+  });
+  it("never searches generic single words like face or body", async () => {
+    const { fallbackExpansion, searchTermSet } = await import("@/lib/discovery");
+    const exp = fallbackExpansion(["beef tallow for skin"], "Whipped Beef Tallow Balm for Face and Body");
+    expect(exp.core).toBe("tallow");
+    const terms = searchTermSet(["beef tallow for skin"], exp, "Whipped Beef Tallow Balm for Face and Body");
+    for (const bad of ["face", "body", "whipped", "beef", "balm", "skin"]) expect(terms).not.toContain(bad);
+    expect(terms).toContain("tallow");
+    expect(terms).toContain("beef tallow");
+  });
+  it("treats a different product form of the same ingredient as adjacent", async () => {
+    const { fallbackClassify, applyClassificationFloor } = await import("@/lib/discovery");
+    const pool = [
+      { product_id: "1", product_name: "Whipped Beef Tallow Honey Balm 4oz", pri_cate_id: "beauty", revenue: 9000 },
+      { product_id: "2", product_name: "Tallow Body Deodorant Stick", pri_cate_id: "beauty", revenue: 5000 },
+      { product_id: "3", product_name: "Beef Tallow Lip Balm with Honey", pri_cate_id: "beauty", revenue: 5000 },
+      { product_id: "4", product_name: "Organic Tallow Soap 3 Pack", pri_cate_id: "beauty", revenue: 5000 },
+    ];
+    const exp = { core: "tallow", variants: ["beef tallow", "tallow balm", "whipped tallow"], product_type: "whipped beef tallow balm for face and body", not_competitors: [] };
+    const out = applyClassificationFloor(fallbackClassify(pool, "tallow", exp.product_type), exp);
+    expect(out.map((p) => p.relevance)).toEqual(["direct", "adjacent", "adjacent", "adjacent"]);
+  });
+});
