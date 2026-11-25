@@ -46,7 +46,7 @@ const saveSchema = z.object({
     role: z.string().nullable().optional(), submitter_name: z.string().max(200).nullable().optional(), submitter_email: z.string().max(200).nullable().optional(),
     client_name: z.string().max(200).nullable().optional(), client_email: z.string().max(200).nullable().optional(), brand_name: z.string().max(200).nullable().optional(),
     branch: z.enum(["launch", "optimize"]).nullable().optional(), step_reached: z.number().int().min(0).max(10).optional(),
-    answers: z.record(z.any()).optional(), products: z.array(z.any()).max(3).optional(), assumptions: z.record(z.any()).optional(),
+    answers: z.record(z.any()).optional(), products: z.array(z.any()).max(5).optional(), assumptions: z.record(z.any()).optional(),
   }),
 });
 
@@ -442,7 +442,7 @@ export const lookupAsin = createServerFn({ method: "POST" }).inputValidator((d: 
   const asin = data.asin.toUpperCase(), sb = await db();
   const { data: cached } = await sb.from("asin_cache").select("fetched_at,payload").eq("asin", asin).maybeSingle();
   // Only reuse complete lookups made by the current parser (v2); retry partial ones.
-  const usable = cached && (cached.payload as any)?.parserVersion === 3 && Number((cached.payload as any)?.lengthIn) > 0;
+  const usable = cached && (cached.payload as any)?.parserVersion === 4 && Number((cached.payload as any)?.lengthIn) > 0;
   if (cached && usable && Date.now() - new Date(cached.fetched_at).getTime() < 30 * 86400000) return { ok: true, product: cached.payload as any as AsinProduct, cached: true };
   try {
     let product: AsinProduct | null = null;
@@ -451,7 +451,7 @@ export const lookupAsin = createServerFn({ method: "POST" }).inputValidator((d: 
       if (product && product.title) break;
     }
     if (!product) return { ok: false, product: null, message: "Amazon did not return this listing right now. We filled in what we could; check the product details below." };
-    await sb.from("asin_cache").upsert({ asin, fetched_at: new Date().toISOString(), payload: { ...product, parserVersion: 3 } as any });
+    await sb.from("asin_cache").upsert({ asin, fetched_at: new Date().toISOString(), payload: { ...product, parserVersion: 4 } as any });
     return { ok: true, product, cached: false };
   } catch (e) {
     console.error("ASIN lookup failed", e);

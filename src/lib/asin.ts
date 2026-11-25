@@ -15,6 +15,10 @@ export interface AsinProduct {
   monthlySold?: number;
   provider: "hub" | "keepa" | "amazon";
   bsr?: number;
+  /** Today's sale price when Amazon shows a deal; `price` then holds the regular price. */
+  dealPrice?: number;
+  /** Amazon's listed weight was physically implausible for the package, so it was dropped. */
+  weightSuspect?: boolean;
 }
 
 const mmToIn = (n: unknown) => typeof n === "number" && n > 0 ? n / 25.4 : 0;
@@ -88,7 +92,14 @@ export function parseAmazonPage(html: string): Omit<AsinProduct, "provider"> | n
   const priceBlock = inBlock('id="corePriceDisplay_desktop_feature_div"') ?? inBlock('id="corePrice_feature_div"') ?? inBlock('id="apex_desktop"') ?? inBlock('id="corePrice_desktop"')
     ?? html.match(/class="a-offscreen">\s*\$([\d,]+\.\d{2})/i)?.[1];
   const candidates = [embedded, ptp ? `${ptp[1]}.${ptp[2]}` : undefined, priceBlock].map((v) => v ? Number(String(v).replace(/,/g, "")) : 0);
-  const price = candidates.find((n) => n > 0 && n < 10000) ?? 0;
+  const current = candidates.find((n) => n > 0 && n < 10000) ?? 0;
+  // During deals the buy box shows the sale price. Plan on the regular one ("Typical price" / "List Price")
+  // printed in the same price block, so a Black Friday price does not set the economics.
+  const near = ptpIdx < 0 ? "" : stripTags(html.slice(ptpIdx, ptpIdx + 8000));
+  const regularMatch = near.match(/(?:Typical price|List Price|List price|Was Price)\s*:?\s*\$\s*([\d,]+\.\d{2})/);
+  const regular = regularMatch ? Number(regularMatch[1]!.replace(/,/g, "")) : 0;
+  const onDeal = current > 0 && regular > current * 1.02 && regular < current * 3;
+  const price = onDeal ? regular : current;
   // Dimensions: prefer package dimensions, then product or item dimensions. Formats like
   // "3.43 x 2.72 x 2.68 inches; 8.48 Ounces" or "3.4"L x 2.7"W x 2.7"H".
   const dimLabel = /(Package Dimensions|Product Dimensions|Item Dimensions(?: LxWxH)?)\s*:?\s*([\d.]+)\s*"?\s*[LlWwHh]?\s*x\s*([\d.]+)\s*"?\s*[LlWwHh]?\s*x\s*([\d.]+)\s*"?\s*[LlWwHh]?\s*(inches|inch|in|centimeters|cm)?\s*(?:;\s*([\d.]+)\s*(pounds|pound|lbs|lb|ounces|ounce|oz|kilograms|kg|grams|g)\b)?/gi;
@@ -108,6 +119,10 @@ export function parseAmazonPage(html: string): Omit<AsinProduct, "provider"> | n
     const w = text.match(/(?:Item Weight|Package Weight|Shipping Weight)\s*:?\s*([\d.]+)\s*(pounds|pound|lbs|lb|ounces|ounce|oz|kilograms|kg|grams|g)\b/i);
     if (w) weightLb = toPounds(Number(w[1]), w[2] ?? "");
   }
+  // A listed weight lighter than packaging itself (under 0.02 oz per cubic inch, below 1 oz) is a listing error.
+  const volume = lengthIn * widthIn * heightIn;
+  const weightSuspect = weightLb > 0 && weightLb * 16 < 1 && volume > 0 && (weightLb * 16) / volume < 0.02;
+  if (weightSuspect) weightLb = 0;
   const image = decode(html.match(/id="landingImage"[^>]*data-old-hires="([^"]+)"/i)?.[1] ?? html.match(/id="landingImage"[^>]*src="([^"]+)"/i)?.[1] ?? "");
   const byline = stripTags(html.match(/id="bylineInfo"[^>]*>([\s\S]*?)<\/a>/i)?.[1] ?? "");
   const brand = byline.replace(/^Visit the\s+/i, "").replace(/\s+Store$/i, "").replace(/^Brand:\s*/i, "").trim();
@@ -118,6 +133,8 @@ export function parseAmazonPage(html: string): Omit<AsinProduct, "provider"> | n
     lengthIn: Math.round(lengthIn * 100) / 100, widthIn: Math.round(widthIn * 100) / 100, heightIn: Math.round(heightIn * 100) / 100,
     weightLb: Math.round(weightLb * 1000) / 1000,
     ...(bsr ? { bsr } : {}),
+    ...(onDeal ? { dealPrice: current } : {}),
+    ...(weightSuspect ? { weightSuspect: true } : {}),
   };
 }
 

@@ -47,3 +47,20 @@ describe("Amazon price", () => {
     expect(parseAmazonPage(`<span id="productTitle">X</span><script>{"priceAmount":39.99}</script><span class="a-offscreen">$6.00</span>`)!.price).toBe(39.99);
   });
 });
+
+describe("Amazon deals and bad listing data", () => {
+  const deal = `<html><body><span id="productTitle">NutraBlast Boric Life 14 Count</span>
+<div id="apex_desktop"><span class="a-price priceToPay"><span class="a-price-whole">8<span class="a-price-decimal">.</span></span><span class="a-price-fraction">51</span></span>
+<span>Typical price: </span><span class="a-price"><span class="a-offscreen">$11.99</span></span></div>
+<li><span>Product Dimensions : </span><span>1.5 x 1.5 x 3 inches; 0.02 ounces</span></li></body></html>`;
+  it("plans on the regular price and keeps the deal aside", () => {
+    const p = parseAmazonPage(deal)!;
+    expect(p.price).toBe(11.99);
+    expect(p.dealPrice).toBe(8.51);
+  });
+  it("drops a weight lighter than the packaging", () => {
+    const p = parseAmazonPage(deal)!;
+    expect(p.weightLb).toBe(0);
+    expect(p.weightSuspect).toBe(true);
+  });
+});

@@ -4,7 +4,7 @@ const text = z.string().trim().min(1).max(200);
 const email = z.string().trim().email().max(200);
 const positive = z.number().finite().positive();
 const nonnegative = z.number().finite().min(0);
-const lookup = z.object({title:z.string(),brand:z.string(),image:z.string(),price:nonnegative,lengthIn:nonnegative,widthIn:nonnegative,heightIn:nonnegative,weightLb:nonnegative,cogs:nonnegative.optional(),monthlyRevenue:nonnegative.optional(),keywords:z.array(z.string()).optional(),categoryPath:z.array(z.string()).optional(),fbaPickAndPackFee:nonnegative.optional(),monthlySold:nonnegative.optional(),provider:z.enum(['hub','keepa','amazon']),bsr:nonnegative.optional()});
+const lookup = z.object({title:z.string(),brand:z.string(),image:z.string(),price:nonnegative,lengthIn:nonnegative,widthIn:nonnegative,heightIn:nonnegative,weightLb:nonnegative,cogs:nonnegative.optional(),monthlyRevenue:nonnegative.optional(),keywords:z.array(z.string()).optional(),categoryPath:z.array(z.string()).optional(),fbaPickAndPackFee:nonnegative.optional(),monthlySold:nonnegative.optional(),provider:z.enum(['hub','keepa','amazon']),bsr:nonnegative.optional(),dealPrice:nonnegative.optional(),weightSuspect:z.boolean().optional()});
 export const marketEntrySchema = z.object({brand:text,product:z.string().trim().min(1).max(2000),asin:z.string().max(10),keywords:z.array(text).min(1).max(8),price:positive,lookup:lookup.optional()});
 const product = z.object({name:text,price:positive,cogs:nonnegative,weight:positive,length:positive,width:positive,height:positive});
 export function qualificationReady(step:number, value:unknown):boolean {
@@ -17,7 +17,7 @@ export function qualificationReady(step:number, value:unknown):boolean {
   if(s.branch==='optimize')return z.object({shopName:text,shopId:text,runsIt:z.enum(['inhouse','agency','nobody']),samplesNow:nonnegative,gmvMax:z.boolean(),probation:z.enum(['yes','no','unsure']),fulfillment:z.enum(['fbt','own','mcf']),challenge:text}).safeParse(a).success && (!a['gmvMax']||positive.safeParse(a['gmvMaxDaily']).success);
   return false;
  }
- if(step===3)return z.array(product).min(1).max(3).safeParse(s.products).success&&text.safeParse(a['amazonRevenue']).success&&text.safeParse(a['dtcRevenue']).success&&z.number().int().positive().safeParse(a['catalogSize']).success;
+ if(step===3)return z.array(product).min(1).max(5).safeParse(s.products).success&&text.safeParse(a['amazonRevenue']).success&&text.safeParse(a['dtcRevenue']).success&&z.number().int().positive().safeParse(a['catalogSize']).success;
  if(step===4)return nonnegative.safeParse(s.assumptions['ownCost']).success;
  return true;
 }

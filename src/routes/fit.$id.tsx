@@ -150,7 +150,7 @@ function Wizard() {
         {step === 1 && <StepWho s={s} up={up} />}
         {step === 2 && <><StepShop s={s} up={up} ans={ans} />{s.branch === "optimize" && s.answers.shopId && <ScanProgress id={id} k={k} answers={s.answers} own onData={setK} onBusy={setOwnBusy}/>}</>}
         {step === 3 && <StepWrap eyebrow="Your plan" title="Product economics">
-          <StepBrand s={s} up={up} ans={ans} />
+          <StepBrand s={s} up={up} ans={ans} k={k} />
           <EconomicsCards r={r} products={s.products} />
 
         </StepWrap>}
@@ -392,8 +392,14 @@ function ShopFinder({ a, ans }: { a: Answers; ans: Ans }) {
   );
 }
 
-function StepBrand({ s, up, ans }: { s: State; up: Up; ans: Ans }) {
+const MAX_HERO = 5;
+function StepBrand({ s, up, ans, k }: { s: State; up: Up; ans: Ans; k: MarketData | null }) {
   const a = s.answers;
+  // Products the brand already sells on TikTok Shop (Kalodata), biggest first, not yet added.
+  const names = new Set(s.products.map((p) => p.name.trim().toLowerCase()));
+  const ownTikTok = (k?.ownProducts ?? []).filter((p: any) => Number(p.revenue) > 0 && !names.has(String(p.product_name ?? "").trim().toLowerCase()))
+    .sort((x: any, y: any) => Number(y.revenue) - Number(x.revenue)).slice(0, 8);
+  const addOwn = (p: any) => up({ products: [...s.products, { ...emptyProduct(), name: String(p.product_name ?? ""), price: Number(p.unit_price) > 0 ? Math.round(Number(p.unit_price) * 100) / 100 : emptyProduct().price, keywords: s.products[0]?.keywords ?? [] }] });
   const setP = (i: number, p: Partial<Product>) => up({ products: s.products.map((x, j) => (j === i ? { ...x, ...p } : x)) });
   return <div className="space-y-6">
     <div className="grid gap-5 sm:grid-cols-3">
@@ -402,7 +408,14 @@ function StepBrand({ s, up, ans }: { s: State; up: Up; ans: Ans }) {
       <Field label="Number of products in catalog"><NumInput value={a.catalogSize} onChange={(catalogSize) => ans({ catalogSize })} /></Field>
     </div>
     {s.products.map((p, i) => <ProductCard key={i} p={p} i={i} set={x => setP(i, x)} canRemove={i > 0} askPrice={i > 0 || s.answers.marketPrice === undefined} remove={() => up({products: s.products.filter((_, j) => j !== i)})} />)}
-    {s.products.length < 3 && <GhostBtn onClick={() => up({products: [...s.products, emptyProduct()]})}><Plus className="h-4 w-4" /> Add hero product</GhostBtn>}
+    {s.products.length < MAX_HERO && ownTikTok.length > 0 && <div className="space-y-2">
+      <div className="eyebrow">Add from your TikTok Shop</div>
+      <div className="flex flex-wrap gap-2">{ownTikTok.map((p: any) => <button key={String(p.product_id)} type="button" onClick={() => addOwn(p)} className="flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1.5 text-left text-sm hover:border-navy">
+        <Plus className="h-4 w-4 shrink-0" /><span className="max-w-[260px] truncate">{String(p.product_name ?? "")}</span><span className="text-caption">${Number(p.unit_price || 0).toFixed(2)} · ${Math.round(Number(p.revenue)).toLocaleString("en-US")}/30d</span>
+      </button>)}</div>
+      <p className="text-xs text-caption">Price comes from TikTok Shop. Add the unit cost and package size for each.</p>
+    </div>}
+    {s.products.length < MAX_HERO && <GhostBtn onClick={() => up({products: [...s.products, emptyProduct()]})}><Plus className="h-4 w-4" /> Add hero product</GhostBtn>}
   </div>;
 }
 
