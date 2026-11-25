@@ -95,7 +95,9 @@ export function parseAmazonPage(html: string): Omit<AsinProduct, "provider"> | n
   const current = candidates.find((n) => n > 0 && n < 10000) ?? 0;
   // During deals the buy box shows the sale price. Plan on the regular one ("Typical price" / "List Price")
   // printed in the same price block, so a Black Friday price does not set the economics.
-  const near = ptpIdx < 0 ? "" : stripTags(html.slice(ptpIdx, ptpIdx + 8000));
+  // The buy box (apex) block holds the "Typical price" for this listing; other blocks on the page belong to other items.
+  const anchor = ['id="apex_desktop"', 'id="corePriceDisplay_desktop_feature_div"', 'id="corePrice_feature_div"', 'id="corePrice_desktop"'].map((a) => html.indexOf(a)).find((i) => i >= 0) ?? ptpIdx;
+  const near = anchor < 0 ? "" : stripTags(html.slice(anchor, anchor + 60000)).replace(/\s+/g, " ");
   const regularMatch = near.match(/(?:Typical price|List Price|List price|Was Price)\s*:?\s*\$\s*([\d,]+\.\d{2})/);
   const regular = regularMatch ? Number(regularMatch[1]!.replace(/,/g, "")) : 0;
   const onDeal = current > 0 && regular > current * 1.02 && regular < current * 3;
