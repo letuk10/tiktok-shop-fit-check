@@ -126,8 +126,16 @@ export function parseAmazonPage(html: string): Omit<AsinProduct, "provider"> | n
   const weightSuspect = weightLb > 0 && weightLb * 16 < 1 && volume > 0 && (weightLb * 16) / volume < 0.02;
   if (weightSuspect) weightLb = 0;
   const image = decode(html.match(/id="landingImage"[^>]*data-old-hires="([^"]+)"/i)?.[1] ?? html.match(/id="landingImage"[^>]*src="([^"]+)"/i)?.[1] ?? "");
-  const byline = stripTags(html.match(/id="bylineInfo"[^>]*>([\s\S]*?)<\/a>/i)?.[1] ?? "");
-  const brand = byline.replace(/^Visit the\s+/i, "").replace(/\s+Store$/i, "").replace(/^Brand:\s*/i, "").trim();
+  // Brand: the byline link, else the "Brand" row of the product overview or details. Rating text such as
+  // "4.5 out of 5 stars" can sit next to the byline, so every candidate is checked before use.
+  const cleanBrand = (t: string) => t.replace(/\s+/g, " ").replace(/^Visit the\s+/i, "").replace(/\s+Store$/i, "").replace(/^Brand:\s*/i, "").trim();
+  const okBrand = (t: string) => !!t && t.length <= 50 && !/out of 5|stars?\b|ratings?\b|reviews?\b/i.test(t) && /[A-Za-z]/.test(t);
+  const brand = [
+    cleanBrand(stripTags(html.match(/<a[^>]*id="bylineInfo"[^>]*>([\s\S]*?)<\/a>/i)?.[1] ?? "")),
+    cleanBrand(stripTags(html.match(/id="bylineInfo"[^>]*>([\s\S]*?)<\/a>/i)?.[1] ?? "")),
+    cleanBrand(stripTags(html.match(/po-brand[\s\S]{0,400}?po-break-word">([\s\S]*?)<\/span>/i)?.[1] ?? "")),
+    cleanBrand(text.match(/\bBrand\s*:\s*([A-Za-z0-9&'. -]{2,40}?)(?=\s{2,}|\s(?:Model|Color|Manufacturer|Date|Item|Product|Ear|Connectivity|Form)\b|$)/)?.[1] ?? ""),
+  ].find(okBrand) ?? "";
   const bsrMatch = text.match(/Best Sellers Rank\s*:?\s*#\s*([\d,]+)/i);
   const bsr = bsrMatch ? Number(bsrMatch[1]!.replace(/,/g, "")) : undefined;
   return {

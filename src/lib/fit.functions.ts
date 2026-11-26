@@ -105,17 +105,38 @@ export const listSubmissions = createServerFn({ method: "POST" })
 const BASE = "https://www.kalodata.com/openapi/v1/tiktok/";
 const COMMON = { region: "US", language: "en-US", currency: "USD", date_range: "last30Day" };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+// Kalodata allows 10 requests per 10 seconds. A sliding window keeps us at 9, so calls can run in
+// parallel without tripping the limit; a rate-limit reply is retried with backoff.
+const WINDOW_MS = 10_000, WINDOW_MAX = 9;
+const recentCalls: number[] = [];
+async function rateSlot() {
+  for (;;) {
+    const now = Date.now();
+    while (recentCalls.length && now - recentCalls[0]! >= WINDOW_MS) recentCalls.shift();
+    if (recentCalls.length < WINDOW_MAX) { recentCalls.push(now); return; }
+    await sleep(WINDOW_MS - (now - recentCalls[0]!) + 50);
+  }
+}
+const isRateLimited = (status: number, message: string) => status === 429 || /rate|limit|frequen|too many/i.test(message);
 async function kalo(path: string, body: Record<string, unknown>) {
   const key = process.env['KALODATA_API_KEY'];
   if (!key) throw new Error("Market data is not connected yet (missing API key).");
-  const res = await fetch(BASE + path, { method: "POST", headers: { "X-API-KEY": key, "Content-Type": "application/json" }, body: JSON.stringify({ ...COMMON, ...body }), signal: AbortSignal.timeout(20000) });
-  const json: any = await res.json().catch(() => null);
-  if (!res.ok || !json || json.success === false) throw new Error(json?.message || `Market data request failed (${res.status}).`);
-  return json.data;
+  for (let attempt = 0; ; attempt++) {
+    await rateSlot();
+    const res = await fetch(BASE + path, { method: "POST", headers: { "X-API-KEY": key, "Content-Type": "application/json" }, body: JSON.stringify({ ...COMMON, ...body }), signal: AbortSignal.timeout(20000) });
+    const json: any = await res.json().catch(() => null);
+    if (res.ok && json && json.success !== false) return json.data;
+    const message = String(json?.message ?? "");
+    if (attempt < 3 && isRateLimited(res.status, message)) { await sleep(2000 * (attempt + 1)); continue; }
+    throw new Error(message || `Market data request failed (${res.status}).`);
+  }
 }
+// The AI gateway is optional. After it fails, skip it for 10 minutes instead of waiting on it every scan.
+let aiDownUntil = 0;
+const aiAvailable = () => Date.now() >= aiDownUntil;
+const markAiDown = () => { aiDownUntil = Date.now() + 10 * 60_000; };
 const asList = (d: any): any[] => Array.isArray(d) ? d : Array.isArray(d?.list) ? d.list : Array.isArray(d?.records) ? d.records : [];
 async function productSearch(keyword: string, size = 100, options: { dateRange?: string; shopId?: string } = {}) {
-  await sleep(1100);
   return kalo("product/rank", { sort_field: { field: "revenue", type: "DESC" }, page_size: size, page_number: 1, ...(options.shopId ? { shop_id: options.shopId } : { keyword }), ...(options.dateRange ? { date_range: options.dateRange } : {}), need_image: 1, need_extra: true }).then(asList);
 }
 const shopSearch = (keyword: string, size = 10) => kalo("shop/rank", { sort_field: { field: "revenue", type: "DESC" }, page_size: size, page_number: 1, keyword, need_image: 1 }).then(asList);
@@ -139,43 +160,40 @@ async function classifyPool(pool: any[], expansion: { product_type: string; not_
   const eligible = pool.filter((p) => Number(p.revenue ?? 0) >= 500).slice(0, 80);
   const payload = eligible.map((p) => ({ product_id: String(p.product_id), name: p.product_name, price: p.unit_price, category_1: p.pri_cate_name ?? p.pri_cate_id, category_2: p.sec_cate_name ?? p.sec_cate_id, category_3: p.ter_cate_name ?? p.ter_cate_id, seller: p.shop_name ?? p.seller_name ?? p.product_shop_name }));
   try {
+    if (!aiAvailable()) throw new Error("AI gateway skipped after a recent failure");
     const { classifyProducts } = await import("./market-ai.server");
     const classified = await classifyProducts(payload, expansion.product_type, expansion.not_competitors);
     const byId = new Map(classified.map((c) => [c.product_id, c]));
     return { ai: true, pool: applyClassificationFloor(pool.map((p) => ({ ...p, relevance: byId.get(String(p.product_id))?.relevance ?? "no", relevanceReason: byId.get(String(p.product_id))?.reason ?? (Number(p.revenue ?? 0) < 500 ? "Under $500 in 30-day GMV." : "Outside the reviewed top 80.") })), expansion) };
   } catch (e) {
-    console.error("AI relevance classification failed; using deterministic fallback", e);
+    if (aiAvailable()) { markAiDown(); console.error("AI relevance classification failed; using deterministic fallback", e); }
     return { ai: false, pool: applyClassificationFloor(fallbackClassify(pool, expansion.core, expansion.product_type, (expansion as { head?: string }).head), expansion) };
   }
 }
 
 async function searchMarket(kws: string[], title = ""): Promise<MarketData> {
   let expansion = fallbackExpansion(kws, title), aiExpansion = false;
-  try { expansion = await (await import("./market-ai.server")).expandSearch(title, kws); aiExpansion = true; }
-  catch (e) { console.error("AI search expansion failed; using deterministic fallback", e); }
+  if (aiAvailable()) {
+    try { expansion = await (await import("./market-ai.server")).expandSearch(title, kws); aiExpansion = true; }
+    catch (e) { markAiDown(); console.error("AI search expansion failed; using deterministic fallback", e); }
+  }
   if (/\btallow\b/i.test([title, ...kws].join(" "))) expansion.core = "tallow";
   const terms = searchTermSet(kws, expansion, title);
   let pool: any[] = [];
-  for (const term of terms) {
-    try { pool = mergePoolProducts(pool, await productSearch(term), term); }
-    catch (e) { console.error(`Search failed for ${term}`, e); }
-  }
-  try {
-    const discovered = await productSearch(expansion.core, 100, { dateRange: previousCalendarMonth() });
-    const known = new Set(pool.map((p) => String(p.product_id)));
-    for (const p of discovered) {
-      if (known.has(String(p.product_id))) continue;
-      // Historical rank is discovery only. Obtain current 30-day revenue before inclusion.
-      try { await sleep(1100); const current = await kalo("product/detail", { product_id: String(p.product_id), date_range: "last30Day" }); pool = mergePoolProducts(pool, [{ ...current, product_id: String(p.product_id) }], `${expansion.core} (previous-month discovery, current 30d)`); }
-      catch { /* Do not use historical GMV when a current snapshot is unavailable. */ }
-    }
-  }
-  catch (e) { console.error("Previous-month core search failed", e); }
+  // Every search runs in parallel through the rate limiter; results merge in a fixed order so the pool is deterministic.
+  const [termResults, discovered] = await Promise.all([
+    Promise.all(terms.map((term) => productSearch(term).catch((e) => { console.error(`Search failed for ${term}`, e); return [] as any[]; }))),
+    productSearch(expansion.core, 100, { dateRange: previousCalendarMonth() }).catch((e) => { console.error("Previous-month core search failed", e); return [] as any[]; }),
+  ]);
+  terms.forEach((term, i) => { pool = mergePoolProducts(pool, termResults[i] ?? [], term); });
+  // Historical rank is discovery only: fetch current 30-day revenue for the biggest unseen products before including them.
+  const known = new Set(pool.map((p) => String(p.product_id)));
+  const unseen = discovered.filter((p) => !known.has(String(p.product_id))).sort((a, b) => Number(b.revenue ?? 0) - Number(a.revenue ?? 0)).slice(0, 12);
+  const currents = await Promise.all(unseen.map((p) => kalo("product/detail", { product_id: String(p.product_id), date_range: "last30Day" }).then((c) => ({ ...c, product_id: String(p.product_id) })).catch(() => null)));
+  for (const c of currents) if (c) pool = mergePoolProducts(pool, [c], `${expansion.core} (previous-month discovery, current 30d)`);
   const sellers = topSellers(pool);
-  for (const shopId of sellers) {
-    try { pool = mergePoolProducts(pool, await productSearch("", 50, { shopId }), "seller expansion"); }
-    catch (e) { console.error(`Seller expansion failed for ${shopId}`, e); }
-  }
+  const sellerResults = await Promise.all(sellers.map((shopId) => productSearch("", 50, { shopId }).catch((e) => { console.error(`Seller expansion failed for ${shopId}`, e); return [] as any[]; })));
+  sellerResults.forEach((r) => { pool = mergePoolProducts(pool, r, "seller expansion"); });
   const classified = await classifyPool(pool, expansion);
   pool = classified.pool;
   const keywords = [{ keyword: terms.join(", "), products: pool, shops: [] }];
@@ -301,24 +319,31 @@ export const enrichMarketProduct = createServerFn({ method: "POST" })
     if (prior?.attempted) return k;
     const entry: EnrichedProduct = { product, ...(prior ?? {}), attempted: true, errors: [] };
     async function attempt(label: string, call: () => Promise<any>) { try { return await call(); } catch { entry.errors?.push(label); return undefined; } }
-    entry.detail = await attempt("Product details unavailable", () => kalo("product/detail", { product_id: data.productId }));
+    // All calls for one product run in parallel through the rate limiter.
+    const newVideoCount = async () => {
+      let newCount = 0, counted = false, capped = false;
+      for (let page = 1; page <= 3; page++) {
+        const videos = await attempt("New video count incomplete", () => kalo("video/rank", { product_id: data.productId, publish_date_range: "<30", sort_field: { field: "revenue", type: "DESC" }, page_size: 100, page_number: page }).then(asList));
+        if (!videos) { capped = counted; break; }
+        counted = true; newCount += videos.length;
+        if (videos.length < 100) { capped = false; break; }
+        capped = true;
+      }
+      return { newCount, counted, capped };
+    };
+    const [detail, detail90, videos, creators, fresh] = await Promise.all([
+      attempt("Product details unavailable", () => kalo("product/detail", { product_id: data.productId })),
+      attempt("90-day details unavailable", () => kalo("product/detail", { product_id: data.productId, date_range: "last90Day" })),
+      attempt("Top videos unavailable", () => kalo("video/rank", { product_id: data.productId, sort_field: { field: "revenue", type: "DESC" }, page_size: 100, page_number: 1 }).then(asList)),
+      attempt("Creator data unavailable", () => kalo("creator/rank", { product_id: data.productId, sort_field: { field: "revenue", type: "DESC" }, page_size: 20, page_number: 1 }).then(asList)),
+      newVideoCount(),
+    ]);
+    entry.detail = detail;
     if (entry.detail) entry.detail = Object.fromEntries(Object.entries(entry.detail).filter(([field]) => ["product_id", "product_name", "product_shop_id", "shop_id", "shop_name", "seller_name", "min_price", "max_price", "revenue", "video_revenue", "live_revenue", "shopping_mall_revenue", "showcase_revenue", "sales_volumn", "creator_number", "video_number", "live_number", "commission_rate", "unit_price", "product_review_count", "launch_date", "delivery_type", "master_image_url", "image_url", "pri_cate_id", "sec_cate_id", "ter_cate_id"].includes(field)));
-    const detail90 = await attempt("90-day details unavailable", () => kalo("product/detail", { product_id: data.productId, date_range: "last90Day" }));
     if (detail90) entry.detail90 = pickDetail(detail90);
-    await sleep(1100);
-    entry.videos = await attempt("Top videos unavailable", () => kalo("video/rank", { product_id: data.productId, sort_field: { field: "revenue", type: "DESC" }, page_size: 100, page_number: 1 }).then(asList));
-    let newCount = 0, counted = false, capped = false;
-    for (let page = 1; page <= 3; page++) {
-      await sleep(1100);
-      const videos = await attempt("New video count incomplete", () => kalo("video/rank", { product_id: data.productId, publish_date_range: "<30", sort_field: { field: "revenue", type: "DESC" }, page_size: 100, page_number: page }).then(asList));
-      if (!videos) { capped = counted; break; }
-      counted = true; newCount += videos.length;
-      if (videos.length < 100) { capped = false; break; }
-      capped = true;
-    }
-    if (counted) { entry.newVideos = newCount; entry.newVideosCapped = capped; }
-    await sleep(1100);
-    entry.creators = await attempt("Creator data unavailable", () => kalo("creator/rank", { product_id: data.productId, sort_field: { field: "revenue", type: "DESC" }, page_size: 20, page_number: 1 }).then(asList));
+    entry.videos = videos;
+    entry.creators = creators;
+    if (fresh.counted) { entry.newVideos = fresh.newCount; entry.newVideosCapped = fresh.capped; }
     const flags = sellerRunFlags(entry.videos ?? [], entry.creators ?? [], [entry.detail?.shop_name, entry.detail?.seller_name, product.shop_name, product.seller_name, product.product_shop_name].filter(Boolean));
     entry.sellerRunVideoIds = flags.sellerRunVideoIds; entry.sellerRunCreatorIds = flags.sellerRunCreatorIds;
     const { data: current } = await sb.from("submissions").select("kalodata").eq("id", data.id).single();
@@ -442,7 +467,7 @@ export const lookupAsin = createServerFn({ method: "POST" }).inputValidator((d: 
   const asin = data.asin.toUpperCase(), sb = await db();
   const { data: cached } = await sb.from("asin_cache").select("fetched_at,payload").eq("asin", asin).maybeSingle();
   // Only reuse complete lookups made by the current parser (v2); retry partial ones.
-  const usable = cached && (cached.payload as any)?.parserVersion === 5 && Number((cached.payload as any)?.lengthIn) > 0;
+  const usable = cached && (cached.payload as any)?.parserVersion === 6 && Number((cached.payload as any)?.lengthIn) > 0;
   if (cached && usable && Date.now() - new Date(cached.fetched_at).getTime() < 30 * 86400000) return { ok: true, product: cached.payload as any as AsinProduct, cached: true };
   try {
     let product: AsinProduct | null = null;
@@ -451,7 +476,7 @@ export const lookupAsin = createServerFn({ method: "POST" }).inputValidator((d: 
       if (product && product.title) break;
     }
     if (!product) return { ok: false, product: null, message: "Amazon did not return this listing right now. We filled in what we could; check the product details below." };
-    await sb.from("asin_cache").upsert({ asin, fetched_at: new Date().toISOString(), payload: { ...product, parserVersion: 5 } as any });
+    await sb.from("asin_cache").upsert({ asin, fetched_at: new Date().toISOString(), payload: { ...product, parserVersion: 6 } as any });
     return { ok: true, product, cached: false };
   } catch (e) {
     console.error("ASIN lookup failed", e);

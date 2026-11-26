@@ -27,7 +27,11 @@ export function ScanProgress({id,k,answers,onData,own=false,onBusy}:{id:string;k
  }
  useEffect(()=>{if(own||products.some(p=>!cache?.[productKey(p)]?.attempted))void run();},[key,own,answers.shopId]);
  return <div className="space-y-3" aria-live="polite">
-  {busy&&<p className="text-sm font-semibold text-navy">{own?'Analyzing your products':'Analyzing selected competitors'}</p>}
+  {busy&&(()=>{const done=products.filter(p=>cache?.[productKey(p)]?.attempted).length;return <div className="space-y-2">
+   <div className="flex items-center justify-between text-sm"><span className="font-semibold text-navy">{own?'Analyzing your products':'Analyzing selected competitors'}</span><span className="text-caption">{done} of {products.length} · about {Math.max(5,(products.length-done)*5)} seconds left</span></div>
+   <div className="h-2 w-full overflow-hidden rounded-full bg-cloud"><div className="h-full rounded-full bg-signal transition-[width] duration-500" style={{width:`${Math.round((done+0.5)/Math.max(1,products.length)*100)}%`}}/></div>
+   <p className="text-xs text-caption">Pulling each product's videos, creators, ads and 90-day sales from Kalodata.</p>
+  </div>;})()}
   {products.map(p=>{const e=cache?.[productKey(p)];return <div key={productKey(p)} className="flex items-center gap-3 border-b border-border py-2 text-sm">{e?.attempted?<Check className="h-4 w-4 shrink-0 text-growth"/>:active===productKey(p)?<Loader2 className="h-4 w-4 shrink-0 animate-spin text-signal"/>:<span className="h-4 w-4 shrink-0 rounded-full border border-border"/>}<span className="min-w-0 flex-1 truncate">{p.product_name}</span><span className="shrink-0 text-xs text-caption">{e?.attempted?e.detail?'Complete':'Unavailable':active===productKey(p)?'Scanning':'Waiting'}</span></div>;})}
   {error&&<><Note>{error}</Note><GhostBtn onClick={()=>void run()} disabled={busy}>Continue scan</GhostBtn></>}
  </div>;

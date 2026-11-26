@@ -64,3 +64,13 @@ describe("Amazon deals and bad listing data", () => {
     expect(p.weightSuspect).toBe(true);
   });
 });
+
+describe("brand from the page", () => {
+  it("never takes the star rating as the brand", () => {
+    const html = `<html><body><span id="productTitle">Bose QuietComfort Headphones</span>
+<div id="bylineInfo_feature_div"><div id="bylineInfo" class="a-section"><span class="a-icon-alt">4.5 out of 5 stars</span><a href="#">4.5 4.5 out of 5 stars</a></div></div>
+<table><tr class="a-spacing-small po-brand"><td><span class="a-text-bold">Brand</span></td><td><span class="a-size-base po-break-word">Bose</span></td></tr></table>
+<span class="priceToPay"><span class="a-price-whole">359<span>.</span></span><span class="a-price-fraction">00</span></span></body></html>`;
+    expect(parseAmazonPage(html)!.brand).toBe("Bose");
+  });
+});

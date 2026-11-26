@@ -17,6 +17,7 @@ import { Story, scenarioOf } from "@/components/fit/story";
 import { ScanProgress } from "@/components/fit/scan-progress";
 import { InterestPrompt } from "@/components/fit/interest-prompt";
 import { missingFields, qualificationReady } from "@/lib/qualification";
+import { MarketLoading } from "@/components/fit/market-loading";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/fit/$id")({
@@ -477,7 +478,7 @@ function StepMarket({ id, s, k, setK, r, persist, ans, afterShare, onKeywords }:
   }
   return <StepWrap eyebrow="Your market · last 30 days" title={`${s.brand_name || "Your"} TikTok Shop market`}>
     {k?.fetchedAt&&<p className="text-xs text-caption">Updated {new Date(k.fetchedAt).toLocaleDateString('en-US')}</p>}
-    {busy?<Note>Finding competing products for {s.products.flatMap(p=>p.keywords).join(', ')}. We broaden long keywords automatically, this can take up to a minute.</Note>:<>
+    {busy?<MarketLoading keywords={[...new Set(s.products.flatMap(p=>p.keywords).map(x=>x.trim()).filter(Boolean))]} brand={s.brand_name} />:<>
       {s.answers.competitorsConfirmed&&pending&&<ScanProgress id={id} k={k} answers={s.answers} onData={setK} onBusy={setEnriching}/>}
       {!enriching && !(s.answers.competitorsConfirmed&&pending) && <MarketSection id={id} r={r} k={k} answers={s.answers} onAnswers={selection} afterShare={afterShare} onEditKeywords={editKw} onMarket={setK}/>}
       {(!selected.length || (s.answers.competitorsConfirmed&&!pending&&!competitorInsights(k,s.answers).hasData))&&<div className="space-y-3"><Field label="Broader keywords (up to 3)"><TextInput value={keywords} onChange={e=>setKeywords(e.target.value)}/></Field><PrimaryBtn onClick={()=>{const values=keywords.split(',').map(v=>v.trim()).filter(Boolean).slice(0,3);if(values.length)void editKw(values);}}>Edit keywords and search</PrimaryBtn></div>}
